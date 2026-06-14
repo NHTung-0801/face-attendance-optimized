@@ -67,7 +67,6 @@ class HistoryView(QWidget):
         self._session_combo = QComboBox()
         self._session_combo.setFixedWidth(260)
         self._session_combo.setFixedHeight(34)
-        self._session_combo.setStyleSheet(_combo_style())
         self._session_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._session_combo)
 
@@ -75,7 +74,6 @@ class HistoryView(QWidget):
         self._date_from = QDateEdit(calendarPopup=True)
         self._date_from.setDate(date.today().replace(day=1))
         self._date_from.setFixedHeight(34)
-        self._date_from.setStyleSheet(_input_style())
         self._date_from.setDisplayFormat("dd/MM/yyyy")
         self._date_from.dateChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._date_from)
@@ -84,7 +82,6 @@ class HistoryView(QWidget):
         self._date_to = QDateEdit(calendarPopup=True)
         self._date_to.setDate(date.today())
         self._date_to.setFixedHeight(34)
-        self._date_to.setStyleSheet(_input_style())
         self._date_to.setDisplayFormat("dd/MM/yyyy")
         self._date_to.dateChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._date_to)
@@ -125,7 +122,6 @@ class HistoryView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
-        self._table.setStyleSheet(_table_style())
         root.addWidget(self._table)
 
     # ── Load sessions vào ComboBox ───────────────────────────────────────────
@@ -136,8 +132,19 @@ class HistoryView(QWidget):
 
         try:
             sessions = self._db.get_all_sessions()
-            for s in sessions:
-                label = f"{s.session_name}  ({s.date.strftime('%d/%m/%Y')})"
+            for item in sessions:
+                # Fix lỗi Tuple của SQLAlchemy 2.0
+                s = item[0] if isinstance(item, tuple) else item
+                
+                # Fix lỗi SQLite trả về String thay vì Date
+                s_date = s.date
+                if isinstance(s_date, str):
+                    try:
+                        s_date = datetime.strptime(s_date.split()[0], "%Y-%m-%d").date()
+                    except Exception:
+                        s_date = datetime.now().date()
+                        
+                label = f"{s.session_name}  ({s_date.strftime('%d/%m/%Y')})"
                 self._session_combo.addItem(label, userData=s.id)
         except Exception as exc:
             logger.exception("HistoryView: không load được sessions")
@@ -156,7 +163,7 @@ class HistoryView(QWidget):
             records = self._fetch_records(session_id, from_dt, to_dt)
         except Exception as exc:
             logger.exception("HistoryView: lỗi query")
-            QMessageBox.warning(self, "Lỗi", f"Không tải được dữ liệu: {exc}")
+            QMessageBox.warning(self, "Lỗi", f"Không tải được dữ liệu:\n{exc}")
             return
 
         self._render(records)
@@ -167,45 +174,60 @@ class HistoryView(QWidget):
         from_dt: datetime,
         to_dt: datetime,
     ) -> list[dict]:
-        """
-        Truy vấn và join dữ liệu Attendance + Employee + Session.
-        Trả về list dict để vừa render bảng vừa export CSV.
-        """
         rows: list[dict] = []
 
         if session_id is not None:
             attendances = self._db.get_attendance_by_session(session_id)
         else:
-            # Lấy tất cả theo khoảng ngày — query tổng hợp
             attendances = self._fetch_all_in_range(from_dt, to_dt)
 
-        for att in attendances:
-            if not (from_dt <= att.timestamp <= to_dt):
+        for item in attendances:
+            # Fix lỗi Tuple SQLAlchemy
+            att = item[0] if isinstance(item, tuple) else item
+            
+            # Fix lỗi string datetime của SQLite
+            att_ts = att.timestamp
+            if isinstance(att_ts, str):
+                try:
+                    # Cắt đuôi microsecond nếu có
+                    ts_str = att_ts.split(".")[0]
+                    att_ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    att_ts = datetime.now()
+            
+            # Chỉ lấy các bản ghi nằm trong khoảng ngày lọc
+            if not (from_dt <= att_ts <= to_dt):
                 continue
+                
             emp = att.employee
             ses = att.session
+            
+            # Xử lý phòng ban an toàn (tránh lỗi NoneType)
+            dept = getattr(emp, 'department', "—") if emp else "—"
+            if not dept: dept = "—"
+            
             rows.append({
                 "emp_code":        emp.emp_code if emp else "—",
                 "name":            emp.name     if emp else "—",
-                "department":      emp.department or "—" if emp else "—",
+                "department":      dept,
                 "session_name":    ses.session_name if ses else "—",
-                "timestamp":       att.timestamp.strftime("%d/%m/%Y %H:%M:%S"),
-                "confidence":      f"{att.confidence_score:.1%}" if att.confidence_score else "—",
-                "is_spoofed":      "⚠ Có" if att.is_spoofed else "Không",
-                # Raw để export
-                "_timestamp_raw":  att.timestamp,
-                "_spoofed_raw":    att.is_spoofed,
+                "timestamp":       att_ts.strftime("%d/%m/%Y %H:%M:%S"),
+                "confidence":      f"{att.confidence_score:.1%}" if getattr(att, 'confidence_score', None) else "—",
+                "is_spoofed":      "⚠ Có" if getattr(att, 'is_spoofed', False) else "Không",
+                "_timestamp_raw":  att_ts,
+                "_spoofed_raw":    getattr(att, 'is_spoofed', False),
             })
 
         return rows
 
-    def _fetch_all_in_range(self, from_dt: datetime, to_dt: datetime) -> list[Attendance]:
-        """Lấy tất cả Attendance từ DB có timestamp trong khoảng."""
+    def _fetch_all_in_range(self, from_dt: datetime, to_dt: datetime) -> list:
         sessions = self._db.get_all_sessions()
-        result: list[Attendance] = []
-        for s in sessions:
+        result = []
+        for item in sessions:
+            s = item[0] if isinstance(item, tuple) else item
             atts = self._db.get_attendance_by_session(s.id)
-            result.extend(atts)
+            if atts:
+                result.extend(atts)
         return result
 
     def _render(self, rows: list[dict]) -> None:
@@ -300,60 +322,16 @@ class HistoryView(QWidget):
 
 # ── Style helpers ─────────────────────────────────────────────────────────────
 def _lbl(text: str) -> QLabel:
-    l = QLabel(text)
-    l.setStyleSheet("color:#94a3b8; font-size:12px;")
-    return l
+    return QLabel(text) # Để lớp toàn cục widget tự quản lý màu chữ chữ phụ
 
 def _hex_color(hex_str: str):
     from PySide6.QtGui import QColor
     return QColor(hex_str)
 
-def _combo_style() -> str:
-    return """
-        QComboBox {
-            background:#1e293b; color:#f1f5f9;
-            border:1px solid #334155; border-radius:6px;
-            padding:0 10px; font-size:13px;
-        }
-        QComboBox::drop-down { border:none; }
-        QComboBox QAbstractItemView {
-            background:#1e293b; color:#f1f5f9;
-            selection-background-color:#2563eb;
-        }
+def _style_btn(btn: QPushButton, variant: str) -> None:
     """
-
-def _input_style() -> str:
-    return """
-        QDateEdit {
-            background:#1e293b; color:#f1f5f9;
-            border:1px solid #334155; border-radius:6px;
-            padding:0 8px; font-size:13px;
-        }
-        QDateEdit::drop-down { border:none; }
+    variant: 'success' (cho nút export), 'secondary' (cho nút làm mới)
     """
-
-def _table_style() -> str:
-    return """
-        QTableWidget {
-            background:#0f172a; color:#cbd5e1;
-            gridline-color:#1e293b; border:none;
-            alternate-background-color:#111827;
-        }
-        QHeaderView::section {
-            background:#1e293b; color:#94a3b8;
-            border:none; padding:6px;
-            font-size:12px; font-weight:600;
-        }
-        QTableWidget::item:selected { background:#1d4ed8; color:#fff; }
-    """
-
-def _style_btn(btn: QPushButton, color: str) -> None:
-    btn.setStyleSheet(f"""
-        QPushButton {{
-            background:{color}; color:#f1f5f9;
-            border:none; border-radius:6px;
-            font-size:12px; font-weight:600;
-            padding:0 14px;
-        }}
-        QPushButton:hover {{ background:{color}cc; }}
-    """)
+    btn.setProperty("class", variant)
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)

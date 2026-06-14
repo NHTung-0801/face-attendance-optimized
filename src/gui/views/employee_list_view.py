@@ -62,7 +62,6 @@ class EmployeeListView(QWidget):
         self._search.setPlaceholderText("🔍  Tìm theo mã hoặc tên…")
         self._search.setFixedWidth(240)
         self._search.setFixedHeight(34)
-        self._search.setStyleSheet(_input_style())
         self._search.textChanged.connect(self._on_search)
         top.addWidget(self._search)
 
@@ -93,7 +92,6 @@ class EmployeeListView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
-        self._table.setStyleSheet(_table_style())
         root.addWidget(self._table)
 
     # ── Data ────────────────────────────────────────────────────────────────
@@ -192,36 +190,10 @@ def _hex_to_qcolor(hex_color: str):
     from PySide6.QtGui import QColor
     return QColor(hex_color)
 
-def _input_style() -> str:
-    return """
-        QLineEdit {
-            background:#1e293b; color:#f1f5f9;
-            border:1px solid #334155; border-radius:6px;
-            padding:0 10px; font-size:13px;
-        }
-        QLineEdit:focus { border-color:#2563eb; }
+def _style_btn(btn: QPushButton, variant: str) -> None:
     """
-
-def _table_style() -> str:
-    return """
-        QTableWidget {
-            background:#0f172a; color:#cbd5e1;
-            gridline-color:#1e293b; border:none;
-            alternate-background-color:#111827;
-        }
-        QHeaderView::section {
-            background:#1e293b; color:#94a3b8;
-            border:none; padding:6px; font-size:12px; font-weight:600;
-        }
-        QTableWidget::item:selected { background:#1d4ed8; color:#fff; }
+    variant: 'danger' (cho nút xóa), 'secondary' (cho nút làm mới)
     """
-
-def _style_btn(btn: QPushButton, color: str) -> None:
-    btn.setStyleSheet(f"""
-        QPushButton {{
-            background:{color}; color:#f1f5f9;
-            border:none; border-radius:4px;
-            font-size:12px; font-weight:600;
-        }}
-        QPushButton:hover {{ background:{color}cc; }}
-    """)
+    btn.setProperty("class", variant)
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)

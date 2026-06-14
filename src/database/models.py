@@ -67,8 +67,10 @@ class Attendance(Base):
     confidence_score: Mapped[float | None]   = mapped_column(Float, nullable=True)   # InsightFace similarity
     is_spoofed:       Mapped[bool]           = mapped_column(Boolean, default=False)  # Anti-spoofing flag
 
-    employee: Mapped["Employee"] = relationship(back_populates="attendances")
-    session:  Mapped["Session"]  = relationship(back_populates="attendances")
+    # Thêm tham số lazy="joined" để ép SQLAlchemy tự động JOIN bảng,
+    # nạp sẵn dữ liệu Nhân viên và Ca làm việc vào RAM trước khi đóng session.
+    employee: Mapped["Employee"] = relationship(back_populates="attendances", lazy="joined")
+    session:  Mapped["Session"]  = relationship(back_populates="attendances", lazy="joined")
 
     def __repr__(self) -> str:
         return f"<Attendance emp={self.emp_id} session={self.session_id} @ {self.timestamp}>"

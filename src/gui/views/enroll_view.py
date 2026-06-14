@@ -50,15 +50,12 @@ class _SampleCollector(QThread):
     Chạy trong thread riêng:
     - Liên tục đọc frame từ CameraStream.
     - Mỗi ENROLL_CAPTURE_INTERVAL frame, kiểm tra có khuôn mặt rõ không.
-    - Emit tiến độ và từng ảnh crop hợp lệ về main thread.
+    - Phát tiếng bíp/delay nhẹ để nhịp độ thu thập rõ ràng.
     """
 
-    # frame BGR để preview (vẽ bbox lên)
     preview_ready: Signal = Signal(np.ndarray)
-    # Mỗi lần chụp được 1 mẫu hợp lệ
-    sample_captured: Signal = Signal(np.ndarray, int)   # (face_crop, current_count)
-    # Kết thúc (thành công hoặc bị hủy)
-    finished: Signal = Signal(bool, str)                # (success, message)
+    sample_captured: Signal = Signal(np.ndarray, int)
+    finished: Signal = Signal(bool, str)
 
     def __init__(self, camera: CameraStream, parent=None) -> None:
         super().__init__(parent)
@@ -73,7 +70,7 @@ class _SampleCollector(QThread):
         self._tick    = 0
         self._count   = 0
 
-        logger.info("SampleCollector: bắt đầu thu thập %d mẫu.", _TARGET_SAMPLES)
+        logger.info("SampleCollector: bat dau thu thap %d mau.", _TARGET_SAMPLES)
 
         while self._running and self._count < _TARGET_SAMPLES:
             frame = self._camera.get_frame(timeout=0.05)
@@ -81,61 +78,70 @@ class _SampleCollector(QThread):
                 continue
 
             self._tick += 1
-
-            # Phát preview mỗi frame (camera luôn mượt)
             annotated = frame.copy()
 
-            # Chỉ kiểm tra mỗi ENROLL_CAPTURE_INTERVAL tick
+            # Chỉ đưa vào AI phân tích sau mỗi N frame
             if self._tick % ENROLL_CAPTURE_INTERVAL == 0:
                 detections = self._recognizer.get_embeddings_from_frame(frame)
 
                 if detections:
-                    # Lấy khuôn mặt có det_score cao nhất
+                    # Lấy khuôn mặt rõ nhất
                     detections.sort(key=lambda d: d[2], reverse=True)
                     _, bbox, det_score = detections[0]
                     x1, y1, x2, y2 = bbox
 
-                    # Vẽ bbox trên preview
                     import cv2
+                    # Vẽ khung nhận diện
                     color = (0, 255, 0) if det_score >= FACE_DET_SCORE_THRESHOLD else (0, 165, 255)
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(
-                        annotated,
-                        f"Score: {det_score:.2f}  Mau: {self._count}/{_TARGET_SAMPLES}",
-                        (x1, max(y1 - 10, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
-                    )
 
                     if det_score >= FACE_DET_SCORE_THRESHOLD:
-                        # Crop khuôn mặt với margin nhỏ
-                        h, w = frame.shape[:2]
-                        margin = 20
-                        cx1 = max(0, x1 - margin)
-                        cy1 = max(0, y1 - margin)
-                        cx2 = min(w, x2 + margin)
-                        cy2 = min(h, y2 + margin)
-                        face_crop = frame[cy1:cy2, cx1:cx2].copy()
-
+                        # 1. TĂNG BIẾN ĐẾM (Chỉ khi đủ điều kiện)
                         self._count += 1
-                        self.sample_captured.emit(face_crop, self._count)
-                        logger.debug("SampleCollector: mẫu %d/%d", self._count, _TARGET_SAMPLES)
+                        cv2.putText(
+                            annotated,
+                            f"Thanh cong: {self._count}/{_TARGET_SAMPLES}",
+                            (x1, max(y1 - 10, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+                        )
+
+                        # Phát ảnh lên UI ngay để người dùng thấy khung xanh
+                        self.preview_ready.emit(annotated)
+
+                        # 2. GỬI FULL FRAME (Tuyệt đối không crop ảnh)
+                        self.sample_captured.emit(frame.copy(), self._count)
+                        logger.debug("SampleCollector: mau %d/%d", self._count, _TARGET_SAMPLES)
+
+                        # 3. NHỊP DỪNG (Cooldown)
+                        # Dừng 0.5 giây để người dùng kịp thay đổi góc mặt, 
+                        # tạo ra nhịp chụp ảnh chắc chắn giống dự án cũ.
+                        time.sleep(0.5)
+                        continue  # Bỏ qua dòng emit preview ở cuối vì đã emit rồi
+                    else:
+                        cv2.putText(
+                            annotated,
+                            "Khuon mat chua ro",
+                            (x1, max(y1 - 10, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+                        )
                 else:
                     import cv2
                     cv2.putText(
                         annotated,
-                        "Không tìm thấy khuôn mặt",
+                        "Khong tim thay khuon mat",
                         (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2,
                     )
 
+            # Phát ảnh liên tục để camera không bị giật
             self.preview_ready.emit(annotated)
 
         if self._count >= _TARGET_SAMPLES:
-            self.finished.emit(True, f"Đã thu thập đủ {_TARGET_SAMPLES} mẫu.")
+            self.finished.emit(True, f"Da thu thap du {_TARGET_SAMPLES} mau.")
         else:
-            self.finished.emit(False, "Thu thập bị hủy.")
+            self.finished.emit(False, "Thu thap bi huy.")
 
-        logger.info("SampleCollector: kết thúc (%d mẫu).", self._count)
+        logger.info("SampleCollector: ket thuc (%d mau).", self._count)
 
     def stop(self) -> None:
         self._running = False
@@ -446,22 +452,6 @@ def _labeled_input(label_text: str, placeholder: str, layout: QVBoxLayout) -> QL
     inp = QLineEdit()
     inp.setPlaceholderText(placeholder)
     inp.setFixedHeight(36)
-    inp.setStyleSheet("""
-        QLineEdit {
-            background: #1e293b;
-            color: #f1f5f9;
-            border: 1px solid #334155;
-            border-radius: 6px;
-            padding: 0 10px;
-            font-size: 13px;
-        }
-        QLineEdit:focus {
-            border-color: #2563eb;
-        }
-        QLineEdit:disabled {
-            color: #475569;
-        }
-    """)
     layout.addWidget(inp)
     return inp
 
@@ -469,21 +459,12 @@ def _labeled_input(label_text: str, placeholder: str, layout: QVBoxLayout) -> QL
 def _divider() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.HLine)
-    line.setStyleSheet("color:#1e293b;")
+    line.setStyleSheet("DividerLine")
     return line
 
 
-def _style_btn(btn: QPushButton, color: str) -> None:
-    btn.setStyleSheet(f"""
-        QPushButton {{
-            background: {color};
-            color: #f1f5f9;
-            border: none;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 600;
-            padding: 0 14px;
-        }}
-        QPushButton:hover    {{ background: {color}cc; }}
-        QPushButton:disabled {{ background: #1e293b; color: #334155; }}
-    """)
+def _style_btn(btn: QPushButton, variant: str = "primary") -> None:
+    # Thay vì truyền mã màu Hex, ta dùng thuộc tính động (Dynamic Property) của Qt
+    btn.setProperty("class", variant)
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)
