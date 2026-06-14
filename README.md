@@ -1,6 +1,5 @@
 # 🎓 Hệ Thống Chấm Công Nhận Diện Khuôn Mặt (Phiên bản Tối Ưu Hóa)
 Dự án Hệ thống điểm danh tự động bằng khuôn mặt, được tái cấu trúc theo chuẩn Clean Architecture (MVC) nhằm mang lại trải nghiệm mượt mà, tối ưu hóa hiệu suất CPU và sẵn sàng mở rộng cho quy mô doanh nghiệp.
----
 
 ##  ✨ Điểm Mới & Tính Năng Nổi Bật
 So với phiên bản cũ, kiến trúc mới tập trung giải quyết triệt để các vấn đề về nghẽn cổ chai hiệu năng:
