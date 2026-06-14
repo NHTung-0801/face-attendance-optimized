@@ -1,0 +1,15 @@
+# Bỏ qua toàn bộ dữ liệu cục bộ, CSDL và file AI nặng
+data/
+logs/
+
+# Môi trường ảo Python
+venv/
+env/
+.venv/
+
+# File cache của Python
+__pycache__/
+*.pyc
+
+# Các file cấu hình môi trường ẩn (nếu có)
+.env
