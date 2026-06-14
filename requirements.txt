@@ -1,0 +1,33 @@
+# ==========================================
+# 1. Core AI & Computer Vision (Xử lý Lõi)
+# ==========================================
+onnxruntime>=1.17.0       # Engine chạy mô hình YOLO (.onnx) siêu nhẹ trên CPU
+insightface==0.7.3        # Nhận diện khuôn mặt và trích xuất vector đặc trưng
+opencv-python>=4.9.0      # Xử lý luồng video từ webcam và thao tác ảnh
+numpy<2.0.0               # Tính toán ma trận (Ép phiên bản dưới 2.0 để không bị lỗi với InsightFace)
+
+# ==========================================
+# 2. Vector Database (Tìm kiếm khuôn mặt)
+# ==========================================
+faiss-cpu>=1.8.0          # Thuật toán tìm kiếm vector siêu tốc của Meta
+
+# ==========================================
+# 3. Relational Database (Cơ sở dữ liệu)
+# ==========================================
+SQLAlchemy>=2.0.0         # ORM quản lý SQLite an toàn cho đa luồng
+
+# ==========================================
+# 4. GUI & Multithreading (Giao diện)
+# ==========================================
+PySide6>=6.6.0            # Framework giao diện hiện đại, hỗ trợ Signal/Slot và QThread
+
+# ==========================================
+# 5. Tiện ích Export Báo Cáo
+# ==========================================
+pandas>=2.2.0             # Xử lý dữ liệu bảng để xuất báo cáo
+openpyxl>=3.1.0           # Hỗ trợ Pandas xuất file định dạng Excel (.xlsx)
+
+# ==========================================
+# 6. Công cụ huấn luyện (Chỉ dùng trong folder tools/)
+# ==========================================
+ultralytics>=8.1.0        # Dùng để chạy script train_yolo.py và export_onnx.py
