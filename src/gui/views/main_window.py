@@ -176,8 +176,11 @@ class MainWindow(QMainWindow):
         self._tick_clock()
 
     @Slot()
-    def _tick_clock(self) -> None:
-        self._sb_clock.setText(datetime.now().strftime("🕐  %H:%M:%S  |  %d/%m/%Y"))
+    def _tick_clock(self):
+        # Lấy chuỗi thời gian trước
+        time_str = datetime.now().strftime("%H:%M:%S  |  %d/%m/%Y")
+        # Nối cái icon đồng hồ vào sau bằng f-string
+        self._sb_clock.setText(f"🕐  {time_str}")
 
     def _update_statusbar(self) -> None:
         try:
