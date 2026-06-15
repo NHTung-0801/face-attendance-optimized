@@ -32,12 +32,12 @@
 }
 
 QWidget {
-    background-color: #0f172a;
-    color: #e2e8f0;
+    background-color: #0b1326; /* Đổi sang màu nền xanh đen sâu thẳm của bạn */
+    color: #dae2fd;            /* Đổi màu text mặc định */
     font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
     font-size: 13px;
-    selection-background-color: #2563eb;
-    selection-color: #f8fafc;
+    selection-background-color: #4cd7f6;
+    selection-color: #0b1326;
 }
 
 QWidget:disabled {
@@ -46,15 +46,16 @@ QWidget:disabled {
 
 /* Frame used as divider lines */
 QFrame[frameShape="4"],   /* HLine */
-QFrame[frameShape="5"] {  /* VLine */
+QFrame[frameShape="5"],   /* VLine */
+QFrame#DividerLine {
     border: none;
-    background-color: #1e293b;
+    background-color: rgba(76, 215, 246, 80); /* Đổi sang Neon Cyan mờ */
     max-height: 1px;
     max-width: 1px;
 }
 
 QSplitter::handle {
-    background-color: #1e293b;
+    background-color: rgba(76, 215, 246, 80);
 }
 
 QSplitter::handle:horizontal { width: 1px; }
@@ -1067,9 +1068,9 @@ QWidget[elevated="true"] {
 }
 
 /* Sidebar panels */
-QWidget[sidebar="true"] {
-    background-color: #0a1628;
-    border-right: 1px solid #1e293b;
+QFrame[sidebar="true"] {
+    background-color: #0b1326;
+    border-right: 2px solid #2ca0ba; /* Đã chuyển sang Hex, viền sáng sẽ hiện ra */
 }
 
 /* Danger / error text helper */
@@ -1121,4 +1122,105 @@ QFrame#DividerLine {
     color: #1e293b;
     background-color: #1e293b;
     max-height: 1px;
+}
+
+/* ============================================================
+   § HIGH-TECH THEME CLASSES (ĐÃ FIX LỖI RGBA BẰNG HEX)
+   ============================================================ */
+
+/* ── Top Navigation Bar (Tách biệt Header) ── */
+QFrame[class="top-bar"] {
+    background-color: #0b1326; 
+    border-bottom: 2px solid #2ca0ba;
+    border-radius: 0px;
+}
+
+/* ── Hiệu ứng Glass Card ── */
+QFrame[class="glass-card"], QWidget[class="glass-card"] {
+    background-color: #161f2e;
+    border: 1px solid #1d6475; 
+    border-radius: 16px;
+}
+
+/* ── AI Core Engine & Camera Glow ── */
+QFrame[class="camera-glow"] {
+    background-color: #060e20;
+    border: 2px solid #27859c; 
+    border-radius: 16px;
+}
+
+QFrame[class="ai-core-glow"] {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #060e20, stop:1 #0f1e3c);
+    border: 2px solid #2ca0ba;
+    border-radius: 16px;
+}
+
+/* ── Typography Neon ── */
+QLabel[class="text-neon-cyan"] {
+    color: #4cd7f6;
+    font-weight: bold;
+}
+QLabel[class="text-neon-blue"] {
+    color: #4d8eff;
+    font-weight: bold;
+}
+QLabel[class="text-neon-green"] {
+    color: #4edea3;
+    font-weight: bold;
+}
+QLabel[class="text-muted-cyan"] {
+    color: #8c909f;
+}
+
+/* ── Style riêng cho Bảng (Nhật ký) ── */
+QTableWidget[class="hightech-table"] {
+    background-color: transparent;
+    alternate-background-color: #0d1720;
+    border: none;
+    gridline-color: #102630;
+}
+QTableWidget[class="hightech-table"]::item {
+    border-bottom: 1px solid #102630;
+    padding: 8px;
+}
+QTableWidget[class="hightech-table"]::item:selected {
+    background-color: #1d6475;
+    color: #ffffff;
+}
+
+QHeaderView[class="hightech-header"]::section {
+    background-color: #111828;
+    color: #8c909f;
+    font-weight: bold;
+    border: none;
+    border-bottom: 1px solid #102630;
+    padding: 10px;
+    text-transform: uppercase;
+}
+
+/* ── Nút bấm High-Tech ── */
+QPushButton[class="btn-cyan"] {
+    background-color: #0d1720;
+    color: #4cd7f6;
+    border: 1px solid #4cd7f6;
+    border-radius: 8px;
+    font-weight: bold;
+}
+QPushButton[class="btn-cyan"]:hover {
+    background-color: #4cd7f6;
+    color: #0b1326;
+}
+
+/* ── Progress Bar phong cách Cyber ── */
+QProgressBar[class="cyber-progress"] {
+    background-color: #0e1627;
+    border: 1px solid #122e38;
+    border-radius: 4px;
+    text-align: center;
+    color: transparent; 
+    max-height: 8px;
+}
+QProgressBar[class="cyber-progress"]::chunk {
+    background-color: #4cd7f6; 
+    border-radius: 3px;
 }

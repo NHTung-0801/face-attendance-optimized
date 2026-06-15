@@ -303,17 +303,25 @@ class FaceRecognizer:
     ) -> list[RecognizeResult]:
         """
         Pipeline đầy đủ: detect khuôn mặt trong frame → trích embedding → nhận diện.
-
-        Returns:
-            list[RecognizeResult] — một phần tử cho mỗi khuôn mặt nhận diện được.
         """
         detections = self.get_embeddings_from_frame(frame_bgr)
         output: list[RecognizeResult] = []
 
         for emb, bbox, _det_score in detections:
             matches = self.identify_face(emb, top_k=top_k)
+            
             if not matches:
+                # Nếu không tìm thấy ai khớp, gán nhãn UNKNOWN thay vì bỏ qua
+                output.append(
+                    RecognizeResult(
+                        emp_code="UNKNOWN",
+                        similarity=0.0,
+                        bbox=bbox,
+                    )
+                )
                 continue
+            
+            # Nếu tìm thấy, lấy kết quả tốt nhất
             emp_code, similarity = matches[0]
             output.append(
                 RecognizeResult(

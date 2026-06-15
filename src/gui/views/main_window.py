@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from src.gui.views.home_view import HomeView
+from src.gui.views.attendance_view import AttendanceView
+# ... các import khác giữ nguyên
 
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QIcon
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QFrame,
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
@@ -35,10 +39,11 @@ logger = get_logger(__name__)
 
 # ── Nav items: (icon, label, index) ─────────────────────────────────────────
 _NAV_ITEMS = [
-    ("🎯", "Điểm Danh",   0),
-    ("➕", "Đăng Ký NV",  1),
-    ("👥", "Nhân Viên",   2),
-    ("📋", "Lịch Sử",     3),
+    ("🏠", "Trang Chủ",   0),
+    ("🎯", "Điểm Danh",   1),
+    ("➕", "Đăng Ký NV",  2),
+    ("👥", "Nhân Viên",   3),
+    ("📋", "Lịch Sử",     4),
 ]
 
 
@@ -69,26 +74,22 @@ class MainWindow(QMainWindow):
         sidebar = self._build_sidebar()
         main_row.addWidget(sidebar)
 
-        # ── Separator line ────────────────────────────────────────────────
-        sep = QWidget()
-        sep.setFixedWidth(1)
-        sep.setStyleSheet("background:#1e293b;")
-        main_row.addWidget(sep)
-
         # ── Stacked pages ─────────────────────────────────────────────────
         self._stack = QStackedWidget()
         main_row.addWidget(self._stack, stretch=1)
 
-        # Khởi tạo và add 4 views
+        # Khởi tạo và add 5 views
+        self._home_view         = HomeView(self)
         self._attendance_view   = AttendanceView(self)
         self._enroll_view       = EnrollView(self)
         self._employee_list_view = EmployeeListView(self)
         self._history_view      = HistoryView(self)
 
-        self._stack.addWidget(self._attendance_view)     # index 0
-        self._stack.addWidget(self._enroll_view)         # index 1
-        self._stack.addWidget(self._employee_list_view)  # index 2
-        self._stack.addWidget(self._history_view)        # index 3
+        self._stack.addWidget(self._home_view)           # index 0
+        self._stack.addWidget(self._attendance_view)     # index 1
+        self._stack.addWidget(self._enroll_view)         # index 2
+        self._stack.addWidget(self._employee_list_view)  # index 3
+        self._stack.addWidget(self._history_view)        # index 4
 
         # ── Kết nối Signals cross-view ────────────────────────────────────
         self._enroll_view.enrolled.connect(self._on_enrolled)
@@ -98,47 +99,59 @@ class MainWindow(QMainWindow):
         self._switch_page(0)
 
     def _build_sidebar(self) -> QWidget:
-        sidebar = QWidget()
-        sidebar.setFixedWidth(200)
-        sidebar.setStyleSheet("background:#0a1628;")
+        sidebar = QFrame()
+        sidebar.setFixedWidth(240) # Mở rộng thêm một chút để chứa các thẻ
+        
+        # ÉP STYLE TRỰC TIẾP TẠI ĐÂY
+        sidebar.setStyleSheet("""
+            QFrame {
+                background-color: #0b1326;
+                border-right: 2px solid #2ca0ba;
+            }
+        """)
 
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # Logo / Brand header
-        brand = QWidget()
+        brand = QFrame()
         brand.setFixedHeight(72)
-        brand.setStyleSheet("background:#0f1f3d; border-bottom:1px solid #1e3a6e;")
+        brand.setStyleSheet("border-bottom: 2px solid #2ca0ba; background: transparent;")
+        
         b_layout = QVBoxLayout(brand)
-        b_layout.setContentsMargins(16, 12, 16, 12)
+        b_layout.setContentsMargins(24, 12, 20, 12)
         b_layout.setSpacing(2)
 
         app_name = QLabel("FaceAttend")
-        app_name.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        app_name.setStyleSheet("color:#60a5fa; letter-spacing:1px;")
+        app_name.setStyleSheet("color:#4cd7f6; font-size: 20px; font-weight: bold; letter-spacing: 1px; border: none;")
         b_layout.addWidget(app_name)
 
-        app_sub = QLabel("Chấm công khuôn mặt")
-        app_sub.setStyleSheet("color:#475569; font-size:10px;")
+        app_sub = QLabel("SecureFace AI Engine")
+        app_sub.setStyleSheet("color:#8c909f; font-size: 11px; border: none;")
         b_layout.addWidget(app_sub)
 
         layout.addWidget(brand)
-        layout.addSpacing(16)
+        layout.addSpacing(24)
 
-        # Nav buttons
+        # ── Vùng chứa các nút (Đã thêm lề và khoảng cách) ──
+        nav_container = QVBoxLayout()
+        nav_container.setContentsMargins(16, 0, 16, 0) # Cách lề trái/phải 16px
+        nav_container.setSpacing(12) # Tách rời mỗi nút ra 12px
+
         for icon, label, idx in _NAV_ITEMS:
             btn = _NavButton(icon, label)
             btn.clicked.connect(lambda _, i=idx: self._switch_page(i))
-            layout.addWidget(btn)
+            nav_container.addWidget(btn)
             self._nav_buttons.append(btn)
 
+        layout.addLayout(nav_container)
         layout.addStretch()
 
         # Footer
-        footer = QLabel("v1.0.0  •  InsightFace + FAISS")
+        footer = QLabel("v1.0.0  •  ONNX Engine")
         footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet("color:#1e3a6e; font-size:10px; padding:12px;")
+        footer.setStyleSheet("color:#2ca0ba; font-size: 11px; padding: 16px; border: none; opacity: 0.6;")
         layout.addWidget(footer)
 
         return sidebar
@@ -273,46 +286,43 @@ class MainWindow(QMainWindow):
 # ── Custom nav button ────────────────────────────────────────────────────────
 class _NavButton(QPushButton):
     _STYLE_NORMAL = """
-        QPushButton {{
-            background: transparent;
-            color: #64748b;
-            border: none;
-            border-radius: 0;
+        QPushButton {
+            background-color: transparent;
+            color: #8c909f;
+            border: 1px solid transparent;
+            border-radius: 12px;
             text-align: left;
-            padding: 14px 20px;
-            font-size: 13px;
-            font-weight: 500;
-            border-left: 3px solid transparent;
-        }}
-        QPushButton:hover {{
-            background: #0f1f3d;
-            color: #94a3b8;
-            border-left: 3px solid #1e3a6e;
-        }}
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #161f2e;
+            color: #4cd7f6;
+            border: 1px solid #1d6475;
+        }
     """
     _STYLE_ACTIVE = """
-        QPushButton {{
-            background: #0f1f3d;
-            color: #60a5fa;
-            border: none;
-            border-radius: 0;
+        QPushButton {
+            background-color: #161f2e;
+            color: #4cd7f6;
+            border: 1px solid #2ca0ba;
+            border-radius: 12px;
             text-align: left;
-            padding: 14px 20px;
-            font-size: 13px;
-            font-weight: 700;
-            border-left: 3px solid #2563eb;
-        }}
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: bold;
+        }
     """
 
     def __init__(self, icon: str, label: str) -> None:
-        super().__init__(f"  {icon}   {label}")
-        self.setFixedHeight(52)
-        self.set_active(False)
+        super().__init__(f"   {icon}    {label}")
+        self.setFixedHeight(48)
         self.setCursor(Qt.PointingHandCursor)
+        self.set_active(False)
 
     def set_active(self, active: bool) -> None:
         self.setStyleSheet(self._STYLE_ACTIVE if active else self._STYLE_NORMAL)
-
 
 # ── Status bar separator ─────────────────────────────────────────────────────
 def _sb_sep() -> QLabel:
