@@ -107,9 +107,13 @@ pip install -r requirements.txt
 
 3. Cấu hình Dữ liệu và Mô hình
 - Đảm bảo bạn đã đưa file mô hình YOLO (best.onnx) và các model của InsightFace vào thư mục data/models/.
+<<<<<<< HEAD
 ```bash
 pip install insightface-0.7.3-cp310-cp310-win_amd64.whl
 ```
+=======
+
+>>>>>>> 0d9a41765eb0f7cbf5c3f57dad51e6ce1116f6dd
 - Hệ thống sẽ tự động khởi tạo file CSDL và FAISS index trong lần chạy đầu tiên.
 
 4. Khởi chạy Ứng dụng
