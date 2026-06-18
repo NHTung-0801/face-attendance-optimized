@@ -48,8 +48,7 @@ logger = get_logger(__name__)
 class _ScanRadar(QWidget):
     """
     Vòng quét radar xoay liên tục quanh icon trung tâm — đại diện cho việc
-    AI Engine luôn "đang quan sát". Đây là signature element của trang chủ:
-    duy nhất, có chủ đích, không lặp lại ở nơi khác trong app.
+    AI Engine luôn "đang quan sát". Đây là signature element của trang chủ.
     """
 
     def __init__(self, size: int = 220, parent: Optional[QWidget] = None) -> None:
@@ -60,7 +59,7 @@ class _ScanRadar(QWidget):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._rotate)
-        self._timer.start(30)   # ~33 FPS — đủ mượt, nhẹ CPU
+        self._timer.start(30)   # ~33 FPS
 
     def _rotate(self) -> None:
         self._angle = (self._angle + 2) % 360
@@ -117,10 +116,10 @@ class _ScanRadar(QWidget):
 class HomeView(QWidget):
     """
     Dashboard tổng quan: trạng thái AI Engine, thông số hệ thống,
-    nhật ký điểm danh gần nhất (data thật từ DB).
+    nhật ký điểm danh gần nhất (data thật từ DB, lọc CHUẨN theo NGÀY HÔM NAY).
     """
 
-    navigate_requested = Signal(int)   # Phát ra index tab muốn chuyển tới
+    navigate_requested = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -185,7 +184,6 @@ class HomeView(QWidget):
         layout.addLayout(title_box)
         layout.addStretch()
 
-        # Đồng hồ realtime nhỏ bên phải (đồng bộ cảm giác với status bar)
         self._header_clock = QLabel()
         self._header_clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._header_clock.setStyleSheet(
@@ -243,7 +241,6 @@ class HomeView(QWidget):
         outer.setSpacing(18)
         outer.setContentsMargins(40, 32, 40, 32)
 
-        # ── Signature: Radar quét quanh icon ──────────────────────────────
         radar_wrapper = QWidget()
         radar_layout  = QVBoxLayout(radar_wrapper)
         radar_layout.setAlignment(Qt.AlignCenter)
@@ -252,7 +249,6 @@ class HomeView(QWidget):
         self._radar = _ScanRadar(size=200)
         radar_layout.addWidget(self._radar, alignment=Qt.AlignCenter)
 
-        # Icon mắt đặt đè lên giữa radar bằng absolute-ish trick: overlay riêng
         eye_label = QLabel("👁")
         eye_font = QFont()
         eye_font.setPointSize(40)
@@ -278,7 +274,6 @@ class HomeView(QWidget):
         self._core_status.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._core_status)
 
-        # ── Loading bars ────────────────────────────────────────────────────
         bars_wrap = QVBoxLayout()
         bars_wrap.setContentsMargins(40, 12, 40, 0)
         bars_wrap.setSpacing(10)
@@ -289,7 +284,6 @@ class HomeView(QWidget):
 
         outer.addLayout(bars_wrap)
 
-        # ── CTA: đi tới Điểm danh ───────────────────────────────────────────
         btn_go = QPushButton("▶  Bắt Đầu Điểm Danh")
         btn_go.setCursor(Qt.PointingHandCursor)
         btn_go.setFixedHeight(42)
@@ -387,7 +381,7 @@ class HomeView(QWidget):
         log_layout.setSpacing(16)
 
         title_row = QHBoxLayout()
-        log_title = QLabel("Nhật Ký Điểm Danh Gần Đây")
+        log_title = QLabel("Nhật Ký Hôm Nay")
         log_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
         title_row.addWidget(log_title)
         title_row.addStretch()
@@ -443,8 +437,7 @@ class HomeView(QWidget):
 
         log_layout.addWidget(self._log_table)
 
-        # Empty-state label (hiện khi chưa có log nào)
-        self._log_empty_label = QLabel("Chưa có lượt điểm danh nào hôm nay.")
+        self._log_empty_label = QLabel("Chưa có lượt điểm danh nào trong hôm nay.")
         self._log_empty_label.setAlignment(Qt.AlignCenter)
         self._log_empty_label.setStyleSheet("color: #475569; font-size: 12px; padding: 24px 0;")
         self._log_empty_label.hide()
@@ -495,9 +488,8 @@ class HomeView(QWidget):
         col.addWidget(log_frame)
         return col
 
-    # ── Data binding (thật, không mock) ─────────────────────────────────────
+    # ── Đọc và Xử lý Dữ liệu Realtime (Đã Fix Logic NGÀY HÔM NAY) ────────────
     def _setup_refresh_timer(self) -> None:
-        """Tự refresh mỗi 10 giây để cập nhật nhật ký mới nhất."""
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self.refresh_data)
         self._refresh_timer.start(10_000)
@@ -508,14 +500,14 @@ class HomeView(QWidget):
             self._refresh_stat_cards()
             self._refresh_log_table()
         except Exception as exc:
-            logger.exception("HomeView: lỗi refresh dữ liệu")
+            logger.exception("HomeView: lỗi tổng quát khi refresh dữ liệu")
 
     def _refresh_stat_cards(self) -> None:
-        # Tổng nhân viên (active trong DB)
+        # Cập nhật số lượng nhân viên
         employees = self._db.get_all_employees(active_only=True)
         self._set_stat_value(self._card_total_nv, str(len(employees)))
 
-        # Ca đang mở
+        # Cập nhật trạng thái ca mở
         active_session = self._db.get_active_session()
         if active_session:
             self._set_stat_value(self._card_session, active_session.session_name)
@@ -528,12 +520,33 @@ class HomeView(QWidget):
             self._status_dot.setStyleSheet("color: #4edea3; font-weight: bold; font-size: 11px;")
             self._status_text.setText("Hệ thống hoạt động  •  Engine: ONNX Runtime")
 
-        # Điểm danh hôm nay
-        if active_session:
-            attendances = self._db.get_attendance_by_session(active_session.id)
-            today_count = len(attendances)
-        else:
-            today_count = 0
+        # ĐẾM ĐIỂM DANH HÔM NAY (Độc lập với việc có ca đang mở hay không)
+        today = datetime.now().date()
+        today_count = 0
+        try:
+            sessions = self._db.get_all_sessions()
+            for item in sessions:
+                s = item[0] if isinstance(item, tuple) else item
+                atts = self._db.get_attendance_by_session(s.id)
+                if atts:
+                    for att in atts:
+                        # Rút trích thời gian an toàn
+                        att_ts = att.timestamp
+                        if isinstance(att_ts, str):
+                            try:
+                                ts_str = att_ts.split(".")[0]
+                                dt_obj = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                continue # Bỏ qua bản ghi lỗi thay vì nhận diện sai thành hôm nay
+                        else:
+                            dt_obj = att_ts
+                        
+                        # Cộng dồn nếu đúng là ngày hôm nay
+                        if dt_obj.date() == today:
+                            today_count += 1
+        except Exception as exc:
+            logger.exception("HomeView: Lỗi đếm số lượng điểm danh hôm nay")
+
         self._set_stat_value(self._card_today, str(today_count))
 
     def _set_stat_value(self, card: QFrame, text: str) -> None:
@@ -542,22 +555,56 @@ class HomeView(QWidget):
             value_label.setText(text)
 
     def _refresh_log_table(self) -> None:
-        active_session = self._db.get_active_session()
+        """Thu thập dữ liệu từ tất cả các ca, CHỈ LỌC lấy dữ liệu của hôm nay."""
         rows: list[tuple[str, str, str]] = []
+        all_attendances = []
 
-        if active_session:
-            attendances = self._db.get_attendance_by_session(active_session.id)
-            # Mới nhất lên trước, lấy tối đa 8 dòng
-            for att in reversed(attendances[-8:]):
-                emp = att.employee
-                name = emp.name if emp else "—"
-                code = emp.emp_code if emp else "—"
-                time_str = att.timestamp.strftime("%H:%M:%S")
-                rows.append(("👤", f"{name}\nID: {code}", time_str))
+        try:
+            # Lấy tất cả lượt điểm danh để lọc
+            sessions = self._db.get_all_sessions()
+            for item in sessions:
+                s = item[0] if isinstance(item, tuple) else item
+                atts = self._db.get_attendance_by_session(s.id)
+                if atts:
+                    all_attendances.extend(atts)
+        except Exception as exc:
+            logger.exception("HomeView: Không thể đọc danh sách ca làm việc từ DB")
+
+        today = datetime.now().date()
+        parsed_records = []
+
+        for att in all_attendances:
+            emp = att.employee
+            if not emp:
+                continue
+
+            # Rút trích thời gian an toàn
+            att_ts = att.timestamp
+            if isinstance(att_ts, str):
+                try:
+                    ts_str = att_ts.split(".")[0]
+                    dt_obj = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    continue  # Bỏ qua dòng dữ liệu bị lỗi format
+            else:
+                dt_obj = att_ts
+
+            # BỘ LỌC CỐT LÕI: Chỉ nạp dữ liệu của ngày hôm nay vào mảng
+            if dt_obj.date() == today:
+                parsed_records.append((dt_obj, emp.name, emp.emp_code))
+
+        # Sắp xếp mới nhất lên đầu và lấy tối đa 8 dòng hiển thị trên Dashboard
+        parsed_records.sort(key=lambda x: x[0], reverse=True)
+        recent_records = parsed_records[:8]
+
+        for dt_obj, name, code in recent_records:
+            time_str = dt_obj.strftime("%H:%M:%S")
+            rows.append(("👤", f"{name}\nID: {code}", time_str))
 
         self._log_count_badge.setText(str(len(rows)))
         self._log_table.setRowCount(0)
 
+        # Xử lý trường hợp không có lượt điểm danh nào HÔM NAY
         if not rows:
             self._log_table.hide()
             self._log_empty_label.show()
@@ -566,21 +613,28 @@ class HomeView(QWidget):
         self._log_table.show()
         self._log_empty_label.hide()
 
+        # Hiển thị dữ liệu
         for row_idx, (icon, name_id, time_str) in enumerate(rows):
             self._log_table.insertRow(row_idx)
+            self._log_table.setRowHeight(row_idx, 46) 
+            
             self._log_table.setItem(row_idx, 0, QTableWidgetItem(icon))
-            self._log_table.setItem(row_idx, 1, QTableWidgetItem(name_id))
-            self._log_table.setItem(row_idx, 2, QTableWidgetItem(time_str))
+            
+            name_item = QTableWidgetItem(name_id)
+            name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self._log_table.setItem(row_idx, 1, name_item)
+            
+            time_item = QTableWidgetItem(time_str)
+            time_item.setTextAlignment(Qt.AlignCenter)
+            self._log_table.setItem(row_idx, 2, time_item)
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
     def stop_animations(self) -> None:
-        """Gọi khi rời trang để tắt radar + timer, tránh tốn CPU ngầm."""
         self._radar.stop()
         self._clock_timer.stop()
         self._refresh_timer.stop()
 
     def resume_animations(self) -> None:
-        """Gọi khi quay lại trang chủ."""
         self._radar._timer.start(30)
         self._clock_timer.start(1000)
         self._refresh_timer.start(10_000)

@@ -16,6 +16,7 @@ Token màu (đồng bộ toàn app):
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -39,32 +40,15 @@ from PySide6.QtWidgets import (
 from src.core.camera_stream import CameraStream
 from src.database.db_manager import DatabaseManager
 from src.gui.threads.ai_worker import AIResult, AIWorker
-from src.utils.config import RECOGNITION_CONFIRM_COUNT
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_CONFIRM_NEEDED = RECOGNITION_CONFIRM_COUNT   # Số frame liên tiếp để xác nhận
+# Yêu cầu phân tích 5 lượt liên tiếp thay vì 3 để chống nhận diện sai lầm
+_CONFIRM_NEEDED = 5
 
 
 class AttendanceView(QWidget):
-    """
-    Layout (responsive, không còn camera đè lên panel):
-
-    ┌──────────────────────────────────────────────────────────┐
-    │  Header: 🎯 Điểm Danh Realtime         [trạng thái ca]    │
-    ├───────────────────────────────────┬────────────────────────┤
-    │                                     │  Status card           │
-    │   Camera feed (co giãn theo cửa sổ)│  ─────────────         │
-    │   khung viền cyan, bo góc          │  Bảng lịch sử ca       │
-    │                                     │  ─────────────         │
-    │   [● tắt/đang chạy]                │  [Bắt đầu] [Kết thúc]  │
-    └───────────────────────────────────┴────────────────────────┘
-
-    Cột trái dùng stretch=3, cột phải stretch=2, panel phải có
-    minimumWidth cố định để không bị bóp méo khi camera video lớn.
-    """
-
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._db      = DatabaseManager.instance()
@@ -74,7 +58,15 @@ class AttendanceView(QWidget):
         self._confirm_counts: dict[str, int] = {}
         self._active_session_id: Optional[int] = None
 
+        # Khóa trạng thái để giữ nguyên thông báo khi nhận diện thành công
+        self._status_lock_time = 0.0
+        self._last_success_emp = ""
+        
+        # Bộ nhớ Cache dùng để theo dõi Cooldown 4 tiếng
+        self._last_checkin_memory: dict[str, datetime] = {}
+
         self._build_ui()
+        self._load_todays_attendances() # Tự nạp lịch sử ngày hôm nay khi vừa mở tab
 
     # ── Xây dựng UI ─────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -153,7 +145,6 @@ class AttendanceView(QWidget):
         col = QVBoxLayout()
         col.setSpacing(14)
 
-        # Khung camera — frame riêng biệt, bo góc, viền cyan, KHÔNG fixed size
         cam_frame = QFrame()
         cam_frame.setStyleSheet("""
             QFrame {
@@ -181,7 +172,6 @@ class AttendanceView(QWidget):
 
         col.addWidget(cam_frame, stretch=1)
 
-        # Status bar nhỏ dưới camera (tách biệt hẳn, không đè)
         status_row = QFrame()
         status_row.setFixedHeight(44)
         status_row.setStyleSheet("""
@@ -217,7 +207,7 @@ class AttendanceView(QWidget):
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(18)
 
-        # ── Status card (trạng thái nhận diện realtime) ───────────────────
+        # 1. Trạng thái nhận diện (Status Card)
         status_card = QFrame()
         status_card.setStyleSheet("""
             QFrame {
@@ -239,15 +229,46 @@ class AttendanceView(QWidget):
         status_layout.addWidget(status_title)
 
         self._status_label = QLabel("Chờ khuôn mặt…")
-        self._status_label.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        self._status_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #f8fafc;")
-        self._status_label.setMinimumHeight(44)
+        self._status_label.setMinimumHeight(48)
         status_layout.addWidget(self._status_label)
 
         col.addWidget(status_card)
 
-        # ── Bảng lịch sử điểm danh ──────────────────────────────────────────
+        # 2. Thẻ Highlight: Vừa điểm danh (Latest Check-in Card)
+        self._latest_card = QFrame()
+        self._latest_card.setStyleSheet("""
+            QFrame {
+                background-color: #0e2a32;
+                border: 1px solid #1d7554;
+                border-radius: 14px;
+            }
+        """)
+        latest_layout = QHBoxLayout(self._latest_card)
+        latest_layout.setContentsMargins(16, 12, 16, 12)
+        latest_layout.setSpacing(14)
+
+        icon_lbl = QLabel("👤")
+        icon_lbl.setStyleSheet("font-size: 26px; border: none; background: transparent;")
+        latest_layout.addWidget(icon_lbl)
+
+        latest_info = QVBoxLayout()
+        latest_info.setSpacing(2)
+        self._latest_name = QLabel("—")
+        self._latest_name.setStyleSheet("color: #f8fafc; font-size: 14px; font-weight: 700; border: none; background: transparent;")
+        self._latest_time = QLabel("Chưa có lượt điểm danh mới")
+        self._latest_time.setStyleSheet("color: #4edea3; font-size: 12px; font-weight: 600; border: none; background: transparent;")
+        latest_info.addWidget(self._latest_name)
+        latest_info.addWidget(self._latest_time)
+        
+        latest_layout.addLayout(latest_info)
+        latest_layout.addStretch()
+        self._latest_card.hide() # Mặc định ẩn
+        col.addWidget(self._latest_card)
+
+        # 3. Bảng Lịch sử trong ca (Cập nhật tiêu đề thành Hôm Nay)
         table_frame = QFrame()
         table_frame.setStyleSheet("""
             QFrame {
@@ -260,12 +281,12 @@ class AttendanceView(QWidget):
         table_layout.setContentsMargins(16, 16, 16, 16)
         table_layout.setSpacing(10)
 
-        table_title = QLabel("Lịch Sử Trong Ca")
+        table_title = QLabel("Lịch Sử Điểm Danh Hôm Nay")
         table_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #f8fafc;")
         table_layout.addWidget(table_title)
 
         self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Mã NV", "Họ tên", "Giờ vào"])
+        self._table.setHorizontalHeaderLabels(["", "Họ Tên / Mã NV", "Giờ"])
         self._table.setStyleSheet("""
             QTableWidget {
                 background-color: transparent;
@@ -273,11 +294,10 @@ class AttendanceView(QWidget):
                 border: none;
                 gridline-color: #102630;
                 color: #dae2fd;
-                font-size: 12px;
             }
             QTableWidget::item {
                 border-bottom: 1px solid #102630;
-                padding: 6px;
+                padding: 8px;
             }
             QTableWidget::item:selected {
                 background-color: #1d6475;
@@ -289,8 +309,8 @@ class AttendanceView(QWidget):
                 font-weight: 700;
                 border: none;
                 border-bottom: 1px solid #102630;
-                padding: 8px;
-                font-size: 10px;
+                padding: 10px;
+                font-size: 11px;
             }
         """)
         self._table.verticalHeader().setVisible(False)
@@ -307,14 +327,14 @@ class AttendanceView(QWidget):
 
         table_layout.addWidget(self._table, stretch=1)
 
-        self._empty_hint = QLabel("Chưa có ai điểm danh trong ca này.")
+        self._empty_hint = QLabel("Chưa có ai điểm danh trong hôm nay.")
         self._empty_hint.setAlignment(Qt.AlignCenter)
         self._empty_hint.setStyleSheet("color: #475569; font-size: 11px; padding: 16px 0;")
         table_layout.addWidget(self._empty_hint)
 
         col.addWidget(table_frame, stretch=1)
 
-        # ── Buttons ──────────────────────────────────────────────────────────
+        # 4. Buttons điều khiển
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
@@ -338,6 +358,62 @@ class AttendanceView(QWidget):
 
         return panel
 
+    # ── Đọc và Xây dựng Dữ liệu Cố định cho Lịch Sử Ngày ────────────────────
+    def _load_todays_attendances(self) -> None:
+        """Nạp toàn bộ dữ liệu của ngày hôm nay vào bảng, giữ nguyên lịch sử."""
+        self._table.setRowCount(0)
+        self._last_checkin_memory.clear()
+        
+        try:
+            sessions = self._db.get_all_sessions()
+            all_attendances = []
+            for item in sessions:
+                s = item[0] if isinstance(item, tuple) else item
+                atts = self._db.get_attendance_by_session(s.id)
+                if atts:
+                    all_attendances.extend(atts)
+                    
+            today = datetime.now().date()
+            parsed_records = []
+            
+            for att in all_attendances:
+                emp = att.employee
+                if not emp:
+                    continue
+                    
+                att_ts = att.timestamp
+                if isinstance(att_ts, str):
+                    try:
+                        ts_str = att_ts.split(".")[0]
+                        dt_obj = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        continue
+                else:
+                    dt_obj = att_ts
+                    
+                if dt_obj.date() == today:
+                    parsed_records.append((dt_obj, emp.name, emp.emp_code))
+                    
+                    # Nạp vào bộ nhớ Cache để track luật 4 tiếng
+                    existing_dt = self._last_checkin_memory.get(emp.emp_code)
+                    if not existing_dt or dt_obj > existing_dt:
+                        self._last_checkin_memory[emp.emp_code] = dt_obj
+                        
+            # Sắp xếp CŨ NHẤT lên trước. Vì _add_table_row insert ở dòng 0,
+            # nên dòng cũ nhất sẽ bị đẩy xuống dưới, dòng MỚI NHẤT luôn ở vị trí đầu cùng.
+            parsed_records.sort(key=lambda x: x[0], reverse=False)
+            
+            for dt_obj, name, code in parsed_records:
+                self._add_table_row(name, code, dt_obj)
+                
+            if parsed_records:
+                self._empty_hint.hide()
+            else:
+                self._empty_hint.show()
+                
+        except Exception as exc:
+            logger.exception("AttendanceView: Lỗi khi tải lịch sử điểm danh hôm nay")
+
     # ── Start / Stop ca ─────────────────────────────────────────────────────
     @Slot()
     def _on_start(self) -> None:
@@ -345,8 +421,13 @@ class AttendanceView(QWidget):
         db_session = self._db.create_session(session_name)
         self._active_session_id = db_session.id
         self._confirm_counts.clear()
-        self._table.setRowCount(0)
-        self._empty_hint.show()
+        
+        self._status_lock_time = 0.0
+        self._last_success_emp = ""
+
+        # Nạp lại lịch sử trong ngày thay vì xoá trắng
+        self._load_todays_attendances()
+        self._latest_card.hide()
 
         if not self._camera.start():
             QMessageBox.critical(self, "Lỗi", "Không thể mở camera!")
@@ -366,7 +447,6 @@ class AttendanceView(QWidget):
 
         self._header_dot.setStyleSheet("color: #4edea3; font-weight: bold; font-size: 11px;")
         self._header_sub.setText(f"Ca đang mở: {session_name}")
-        self._header_count_badge.setText("0 lượt")
 
         self._set_status("Đang nhận diện…", "#4cd7f6")
 
@@ -397,13 +477,13 @@ class AttendanceView(QWidget):
         self._header_dot.setStyleSheet("color: #f87171; font-weight: bold; font-size: 11px;")
         self._header_sub.setText("Chưa bắt đầu ca làm việc")
 
+        self._latest_card.hide()
         self._set_status("Chờ khuôn mặt…", "#f8fafc")
         logger.info("AttendanceView: kết thúc ca.")
 
     # ── Slots nhận Signal từ AIWorker ────────────────────────────────────────
     @Slot(np.ndarray)
     def _on_frame(self, frame_bgr: np.ndarray) -> None:
-        """Chuyển BGR numpy → QPixmap → hiển thị, co giãn theo kích thước QLabel hiện tại."""
         h, w, ch = frame_bgr.shape
         rgb = frame_bgr[:, :, ::-1].copy()
         q_img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
@@ -419,39 +499,80 @@ class AttendanceView(QWidget):
         if self._active_session_id is None:
             return
 
+        current_time = time.time()
+
         for r in results:
             if not r.is_real:
-                self._set_status(f"⚠ Phát hiện giả mạo! ({r.spoof_conf:.0%})", "#f87171")
+                # Nếu phát hiện giả mạo, ép bỏ qua Khóa trạng thái để hiển thị Warning ngay
+                self._set_status(f"⚠ Giả mạo! ({r.spoof_conf:.0%})", "#f87171")
                 self._confirm_counts.clear()
+                self._status_lock_time = current_time + 1.5 
                 continue
 
             if r.emp_code is None or r.emp_code == "UNKNOWN":
-                self._set_status("Không nhận diện được khuôn mặt.", "#fbbf24")
+                if current_time > self._status_lock_time:
+                    self._set_status("Không nhận diện được khuôn mặt.", "#fbbf24")
                 continue
 
+            # NẾU CÒN TRONG THỜI GIAN KHÓA VÀ LÀ NGƯỜI VỪA ĐIỂM DANH: BỎ QUA KHÔNG ĐẾM LẠI
+            if current_time < self._status_lock_time and r.emp_code == self._last_success_emp:
+                continue
+
+            # Đếm số lượng frame khớp
             self._confirm_counts[r.emp_code] = self._confirm_counts.get(r.emp_code, 0) + 1
 
             if self._confirm_counts[r.emp_code] < _CONFIRM_NEEDED:
-                self._set_status(
-                    f"Đang xác nhận: {r.emp_code} "
-                    f"({self._confirm_counts[r.emp_code]}/{_CONFIRM_NEEDED})",
-                    "#60a5fa",
-                )
+                if current_time > self._status_lock_time:
+                    self._set_status(
+                        f"Đang phân tích: {r.emp_code} "
+                        f"({self._confirm_counts[r.emp_code]}/{_CONFIRM_NEEDED})",
+                        "#60a5fa",
+                    )
                 continue
 
+            # --- Đã đủ 5 khung hình liên tiếp ---
             self._confirm_counts[r.emp_code] = 0
+            emp = self._db.get_employee_by_code(r.emp_code)
+            name = emp.name if emp else "Không rõ"
+            dt_now = datetime.now()
+
+            # KIỂM TRA LUẬT 4 TIẾNG COOLDOWN
+            last_checkin = self._last_checkin_memory.get(r.emp_code)
+            if last_checkin:
+                diff_seconds = (dt_now - last_checkin).total_seconds()
+                if diff_seconds < 4 * 3600:
+                    # Chặn điểm danh nếu chưa đủ 4 tiếng
+                    hours = int(diff_seconds // 3600)
+                    mins = int((diff_seconds % 3600) // 60)
+                    time_str = f"{hours}h {mins}p" if hours > 0 else f"{mins} phút"
+
+                    self._set_status(f"ℹ Đã điểm danh {time_str} trước:\n{name}", "#fbbf24")
+                    self._status_lock_time = current_time + 2.5
+                    self._last_success_emp = r.emp_code
+                    # Update thẻ báo mầu vàng cảnh báo
+                    self._update_latest_card(name, r.emp_code, last_checkin, is_recent_duplicate=True)
+                    continue
+
+            # Tiến hành lưu vào DB nếu thỏa mãn
             success, msg = self._db.record_attendance(
-                emp_id           = self._resolve_emp_id(r.emp_code),
+                emp_id           = emp.id if emp else -1,
                 session_id       = self._active_session_id,
                 confidence_score = r.similarity,
                 is_spoofed       = False,
             )
 
             if success:
-                self._set_status(f"✅ Đã chấm công: {r.emp_code}", "#4edea3")
-                self._add_table_row(r.emp_code)
+                self._last_checkin_memory[r.emp_code] = dt_now  # Cập nhật Cache
+
+                self._set_status(f"✅ Đã nhận diện:\n{name}", "#4edea3")
+                self._status_lock_time = current_time + 2.5
+                self._last_success_emp = r.emp_code
+                
+                self._update_latest_card(name, r.emp_code, dt_now, is_recent_duplicate=False)
+                self._add_table_row(name, r.emp_code, dt_now)
+
             else:
-                self._set_status(f"ℹ {r.emp_code}: {msg}", "#8c909f")
+                self._set_status(f"❌ Lỗi: {msg}", "#f87171")
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
@@ -463,25 +584,37 @@ class AttendanceView(QWidget):
         self._status_label.setText(text)
         self._status_label.setStyleSheet(f"color:{color};")
 
-    def _resolve_emp_id(self, emp_code: str) -> int:
-        emp = self._db.get_employee_by_code(emp_code)
-        return emp.id if emp else -1
+    def _update_latest_card(self, name: str, code: str, dt_obj: datetime, is_recent_duplicate: bool = False) -> None:
+        self._latest_card.show()
+        self._latest_name.setText(f"{name} ({code})")
+        if is_recent_duplicate:
+            self._latest_time.setText(f"Đã điểm danh lúc: {dt_obj.strftime('%H:%M:%S')} (Chưa qua 4h)")
+            self._latest_time.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: 600; border: none; background: transparent;")
+        else:
+            self._latest_time.setText(f"Vừa điểm danh lúc: {dt_obj.strftime('%H:%M:%S')}")
+            self._latest_time.setStyleSheet("color: #4edea3; font-size: 12px; font-weight: 600; border: none; background: transparent;")
 
-    def _add_table_row(self, emp_code: str) -> None:
-        emp  = self._db.get_employee_by_code(emp_code)
-        name = emp.name if emp else "—"
-        now  = datetime.now().strftime("%H:%M:%S")
-
+    def _add_table_row(self, name: str, code: str, dt_obj: datetime) -> None:
         self._empty_hint.hide()
+        
+        # Thêm dòng mới LÊN TRÊN CÙNG (Index = 0)
+        self._table.insertRow(0)
+        self._table.setRowHeight(0, 46)
+        
+        icon_item = QTableWidgetItem("👤")
+        icon_item.setTextAlignment(Qt.AlignCenter)
+        self._table.setItem(0, 0, icon_item)
+        
+        name_item = QTableWidgetItem(f"{name}\nID: {code}")
+        name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._table.setItem(0, 1, name_item)
+        
+        time_item = QTableWidgetItem(dt_obj.strftime("%H:%M:%S"))
+        time_item.setTextAlignment(Qt.AlignCenter)
+        self._table.setItem(0, 2, time_item)
 
-        row = self._table.rowCount()
-        self._table.insertRow(row)
-        self._table.setItem(row, 0, _make_cell(emp_code))
-        self._table.setItem(row, 1, _make_cell(name))
-        self._table.setItem(row, 2, _make_cell(now))
-        self._table.scrollToBottom()
-
-        self._header_count_badge.setText(f"{row + 1} lượt")
+        # Cập nhật Badge tổng số lượt của ngày hôm nay
+        self._header_count_badge.setText(f"{self._table.rowCount()} lượt")
 
     # ── Dọn dẹp khi đóng widget ─────────────────────────────────────────────
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -489,13 +622,7 @@ class AttendanceView(QWidget):
         super().closeEvent(event)
 
 
-# ── Widget Helpers ───────────────────────────────────────────────────────────
-def _make_cell(text: str) -> QTableWidgetItem:
-    item = QTableWidgetItem(text)
-    item.setTextAlignment(Qt.AlignCenter)
-    return item
-
-
+# ── Style Helpers ────────────────────────────────────────────────────────────
 def _apply_primary_style(btn: QPushButton) -> None:
     btn.setStyleSheet("""
         QPushButton {
@@ -526,5 +653,5 @@ def _apply_danger_style(btn: QPushButton) -> None:
         }
         QPushButton:hover { background-color: #f8717122; }
         QPushButton:pressed { background-color: #f8717144; }
-        QPushButton:disabled { background-color: transparent; color: #334155; border-color: #1e293b; }
+        QPushButton:disabled { background-color: transparent; color: #334155; border: 1px solid #1e293b; }
     """)
