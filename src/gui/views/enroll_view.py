@@ -1,11 +1,11 @@
 """
 src/gui/views/enroll_view.py
-EnrollView — đăng ký khuôn mặt nhân viên mới.
+EnrollView — Đăng ký khuôn mặt nhân viên mới.
 Thu thập 15 mẫu qua CameraStream, validate qua FaceRecognizer, lưu qua EmployeeManager.
+Phong cách đồng bộ SecureFace AI Engine (Cyberpunk / High-Tech).
 """
 
 from __future__ import annotations
-from src.gui.components.video_frame import VideoFrame
 import time
 from typing import Optional
 
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui.components.video_frame import VideoFrame
 from src.core.camera_stream import CameraStream
 from src.core.employee_manager import EmployeeManager
 from src.core.face_recognizer import FaceRecognizer
@@ -39,11 +40,11 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_TARGET_SAMPLES = ENROLL_CAPTURE_COUNT   # 15 mẫu
+_TARGET_SAMPLES = ENROLL_CAPTURE_COUNT   # Mặc định: 15 mẫu
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Worker thread thu thập mẫu
+# Worker thread thu thập mẫu (Giữ nguyên logic lõi)
 # ═══════════════════════════════════════════════════════════════════════════
 class _SampleCollector(QThread):
     """
@@ -113,8 +114,6 @@ class _SampleCollector(QThread):
                         logger.debug("SampleCollector: mau %d/%d", self._count, _TARGET_SAMPLES)
 
                         # 3. NHỊP DỪNG (Cooldown)
-                        # Dừng 0.5 giây để người dùng kịp thay đổi góc mặt, 
-                        # tạo ra nhịp chụp ảnh chắc chắn giống dự án cũ.
                         time.sleep(0.5)
                         continue  # Bỏ qua dòng emit preview ở cuối vì đã emit rồi
                     else:
@@ -149,22 +148,9 @@ class _SampleCollector(QThread):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# EnrollView
+# EnrollView (Giao diện đã nâng cấp)
 # ═══════════════════════════════════════════════════════════════════════════
 class EnrollView(QWidget):
-    """
-    Layout:
-    ┌─────────────────────────────────────────────┐
-    │  [Camera preview — QLabel]  │  [Form panel] │
-    │                             │  Mã NV        │
-    │                             │  Họ Tên       │
-    │                             │  Phòng Ban    │
-    │                             │  ProgressBar  │
-    │                             │  Status       │
-    │                             │  [Nút]        │
-    └─────────────────────────────────────────────┘
-    """
-
     # Emit khi đăng ký thành công (để MainWindow cập nhật status bar)
     enrolled = Signal(str)   # emp_code
 
@@ -179,118 +165,267 @@ class EnrollView(QWidget):
 
         self._build_ui()
 
-    # ── Xây dựng UI ─────────────────────────────────────────────────────────
+    # ── Xây dựng UI Đồng bộ ──────────────────────────────────────────────────
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(16)
+        self.setStyleSheet("background-color: #0b1326;")
 
-        # ── Cột trái: camera preview ───────────────────────────────────────
-        left = QVBoxLayout()
-        left.setSpacing(8)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self._video_label = VideoFrame() # Đã dùng component mới
-        left.addWidget(self._video_label)
+        # 1. Header phân hệ
+        root.addWidget(self._build_header())
 
-        self._cam_hint = QLabel("Nhìn thẳng vào camera, giữ khuôn mặt trong khung hình")
+        # Khung chứa nội dung chính
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(28, 24, 28, 28)
+        body_layout.setSpacing(24)
+
+        # 2. Cột trái (Thẻ Camera thu thập) - Stretch 5
+        body_layout.addWidget(self._build_camera_card(), stretch=5)
+        
+        # 3. Cột phải (Thẻ Form thông tin) - Stretch 4
+        body_layout.addWidget(self._build_form_card(), stretch=4)
+
+        root.addWidget(body, stretch=1)
+
+    # ── Phân hệ Header ───────────────────────────────────────────────────────
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setFixedHeight(76)
+        header.setStyleSheet("""
+            QFrame {
+                background-color: #0b1326;
+                border-bottom: 2px solid #2ca0ba;
+            }
+        """)
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(32, 0, 32, 0)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+        title_box.setAlignment(Qt.AlignVCenter)
+
+        title = QLabel("➕  Đăng Ký Khuôn Mặt")
+        title.setStyleSheet(
+            "font-size: 22px; font-weight: 700; color: #f8fafc; letter-spacing: 0.3px;"
+        )
+        title_box.addWidget(title)
+
+        sub = QLabel("Thu thập dữ liệu sinh trắc học và tạo hồ sơ nhân viên mới")
+        sub.setStyleSheet("color: #8c909f; font-size: 12px;")
+        title_box.addWidget(sub)
+
+        layout.addLayout(title_box)
+        layout.addStretch()
+
+        return header
+
+    # ── Thẻ Camera (Camera Card) ─────────────────────────────────────────────
+    def _build_camera_card(self) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #161f2e;
+                border: 1px solid #1d6475;
+                border-radius: 16px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("📷 TRẠNG THÁI CAMERA")
+        title.setStyleSheet("color: #4cd7f6; font-size: 12px; font-weight: 700; letter-spacing: 1px; border: none;")
+        layout.addWidget(title)
+
+        # Video Frame container
+        self._video_label = VideoFrame()
+        self._video_label.setStyleSheet("border: 1px solid #102630; border-radius: 8px; background-color: #060e20;")
+        self._video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self._video_label, stretch=1)
+
+        self._cam_hint = QLabel("Nhìn thẳng vào camera, giữ khuôn mặt trong khung hình để hệ thống phân tích vector.")
         self._cam_hint.setAlignment(Qt.AlignCenter)
-        self._cam_hint.setStyleSheet("color:#64748b; font-size:12px;")
-        left.addWidget(self._cam_hint)
-        left.addStretch()
+        self._cam_hint.setStyleSheet("color: #8c909f; font-size: 12px; border: none;")
+        layout.addWidget(self._cam_hint)
 
-        root.addLayout(left)
+        return card
 
-        # ── Separator ─────────────────────────────────────────────────────
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color:#1e293b;")
-        root.addWidget(sep)
+    # ── Thẻ Form (Form Card) ─────────────────────────────────────────────────
+    def _build_form_card(self) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #161f2e;
+                border: 1px solid #1d6475;
+                border-radius: 16px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setSpacing(20)
 
-        # ── Cột phải: form ─────────────────────────────────────────────────
-        right = QVBoxLayout()
-        right.setSpacing(14)
+        title = QLabel("📝 THÔNG TIN HỒ SƠ")
+        title.setStyleSheet("color: #4cd7f6; font-size: 12px; font-weight: 700; letter-spacing: 1px; border: none;")
+        layout.addWidget(title)
 
-        # Tiêu đề
-        title = QLabel("➕  Đăng Ký Nhân Viên")
-        title.setFont(QFont("Segoe UI", 15, QFont.Bold))
-        title.setStyleSheet("color:#f1f5f9;")
-        right.addWidget(title)
+        # Form Fields
+        self._emp_code_input = self._create_input_group("Mã Nhân Viên *", "VD: NV001", layout)
+        self._name_input     = self._create_input_group("Họ và Tên *", "VD: Nguyễn Văn A", layout)
+        self._dept_input     = self._create_input_group("Phòng Ban", "VD: Kỹ thuật", layout)
 
-        right.addWidget(_divider())
-
-        # Form fields
-        self._emp_code_input = _labeled_input("Mã Nhân Viên *", "VD: NV001", right)
-        self._name_input     = _labeled_input("Họ và Tên *",    "VD: Nguyễn Văn A", right)
-        self._dept_input     = _labeled_input("Phòng Ban",      "VD: Kỹ thuật", right)
-
-        right.addWidget(_divider())
-
-        # Progress bar
-        progress_label = QLabel("Tiến độ thu thập mẫu khuôn mặt:")
-        progress_label.setStyleSheet("color:#94a3b8; font-size:12px;")
-        right.addWidget(progress_label)
+        # Progress bar Area
+        prog_layout = QVBoxLayout()
+        prog_layout.setSpacing(8)
+        
+        progress_label = QLabel("Tiến độ thu thập sinh trắc học:")
+        progress_label.setStyleSheet("color: #8c909f; font-size: 12px; font-weight: 600; border: none;")
+        prog_layout.addWidget(progress_label)
 
         self._progress = QProgressBar()
         self._progress.setMinimum(0)
         self._progress.setMaximum(_TARGET_SAMPLES)
         self._progress.setValue(0)
-        self._progress.setFixedHeight(22)
+        self._progress.setFixedHeight(24)
         self._progress.setFormat(f"%v / {_TARGET_SAMPLES} mẫu")
         self._progress.setStyleSheet("""
             QProgressBar {
-                background: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 4px;
+                background: #0d1720;
+                border: 1px solid #1d6475;
+                border-radius: 6px;
                 text-align: center;
-                color: #cbd5e1;
+                color: #f8fafc;
                 font-size: 11px;
+                font-weight: 700;
             }
             QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #2563eb, stop:1 #7c3aed);
-                border-radius: 3px;
+                background-color: #4cd7f6;
+                border-radius: 4px;
             }
         """)
-        right.addWidget(self._progress)
+        prog_layout.addWidget(self._progress)
+        layout.addLayout(prog_layout)
 
-        # Trạng thái
-        self._status_label = QLabel("Điền thông tin và nhấn 'Bắt đầu lấy mẫu'.")
+        # Status Hint
+        self._status_label = QLabel("Vui lòng điền thông tin và nhấn 'Bắt đầu lấy mẫu'.")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color:#94a3b8; font-size:12px; min-height:36px;")
-        self._status_label.setFixedWidth(300)
-        right.addWidget(self._status_label)
+        self._status_label.setStyleSheet("color: #94a3b8; font-size: 13px; min-height: 40px; border: none;")
+        layout.addWidget(self._status_label)
 
-        right.addStretch()
+        layout.addStretch()
 
-        # Buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # Action Buttons
+        btn_layout = QVBoxLayout()
+        btn_layout.setSpacing(12)
 
         self._btn_collect = QPushButton("▶  Bắt đầu lấy mẫu")
-        self._btn_collect.setFixedHeight(40)
+        self._btn_collect.setFixedHeight(46)
+        self._btn_collect.setCursor(Qt.PointingHandCursor)
         self._btn_collect.clicked.connect(self._on_start_collect)
-        _style_btn(self._btn_collect, "#2563eb")
-        btn_row.addWidget(self._btn_collect)
+        self._style_primary_btn(self._btn_collect)
+        btn_layout.addWidget(self._btn_collect)
+
+        row_btn = QHBoxLayout()
+        row_btn.setSpacing(12)
 
         self._btn_cancel = QPushButton("✕  Hủy")
         self._btn_cancel.setFixedHeight(40)
+        self._btn_cancel.setCursor(Qt.PointingHandCursor)
         self._btn_cancel.setEnabled(False)
         self._btn_cancel.clicked.connect(self._on_cancel)
-        _style_btn(self._btn_cancel, "#475569")
-        btn_row.addWidget(self._btn_cancel)
-
-        right.addLayout(btn_row)
+        self._style_danger_btn(self._btn_cancel)
+        row_btn.addWidget(self._btn_cancel)
 
         self._btn_reset = QPushButton("↺  Làm lại")
-        self._btn_reset.setFixedHeight(36)
+        self._btn_reset.setFixedHeight(40)
+        self._btn_reset.setCursor(Qt.PointingHandCursor)
         self._btn_reset.setEnabled(False)
         self._btn_reset.clicked.connect(self._reset_form)
-        _style_btn(self._btn_reset, "#334155")
-        right.addWidget(self._btn_reset)
+        self._style_secondary_btn(self._btn_reset)
+        row_btn.addWidget(self._btn_reset)
 
-        root.addLayout(right)
+        btn_layout.addLayout(row_btn)
+        layout.addLayout(btn_layout)
 
-    # ── Slots ────────────────────────────────────────────────────────────────
+        return card
+
+    # ── Helpers Giao diện ────────────────────────────────────────────────────
+    def _create_input_group(self, label_text: str, placeholder: str, parent_layout: QVBoxLayout) -> QLineEdit:
+        group = QVBoxLayout()
+        group.setSpacing(6)
+
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("color: #cbd5e1; font-size: 12px; font-weight: 600; border: none;")
+        group.addWidget(lbl)
+
+        inp = QLineEdit()
+        inp.setPlaceholderText(placeholder)
+        inp.setFixedHeight(42)
+        inp.setStyleSheet("""
+            QLineEdit {
+                background-color: #0d1720;
+                color: #f8fafc;
+                border: 1px solid #1d6475;
+                border-radius: 8px;
+                padding: 0 14px;
+                font-size: 13px;
+            }
+            QLineEdit:focus { border: 1px solid #4cd7f6; }
+            QLineEdit::placeholder { color: #475569; }
+            QLineEdit:disabled { background-color: #060e20; color: #475569; border: 1px solid #102630; }
+        """)
+        group.addWidget(inp)
+        parent_layout.addLayout(group)
+        return inp
+
+    def _style_primary_btn(self, btn: QPushButton) -> None:
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4cd7f6;
+                color: #0b1326;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: #6fe2ff; }
+            QPushButton:pressed { background-color: #2ca0ba; }
+            QPushButton:disabled { background-color: #1e293b; color: #475569; }
+        """)
+
+    def _style_secondary_btn(self, btn: QPushButton) -> None:
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0d1720;
+                color: #4cd7f6;
+                border: 1px solid #4cd7f6;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: #4cd7f6; color: #0b1326; }
+            QPushButton:pressed { background-color: #2ca0ba; color: #0b1326; }
+            QPushButton:disabled { background-color: transparent; border: 1px solid #334155; color: #475569; }
+        """)
+
+    def _style_danger_btn(self, btn: QPushButton) -> None:
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #f87171;
+                border: 1px solid #f87171;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: #f87171; color: #0b1326; }
+            QPushButton:pressed { background-color: #dc2626; color: #0b1326; }
+            QPushButton:disabled { background-color: transparent; border: 1px solid #334155; color: #475569; }
+        """)
+
+    # ── Slots & Logic điều khiển ─────────────────────────────────────────────
     @Slot()
     def _on_start_collect(self) -> None:
         # Validate form
@@ -331,18 +466,18 @@ class EnrollView(QWidget):
         self._emp_code_input.setEnabled(False)
         self._name_input.setEnabled(False)
         self._dept_input.setEnabled(False)
-        self._set_status("📸 Đang thu thập mẫu — giữ khuôn mặt rõ ràng…", "#60a5fa")
+        self._set_status("📸 Đang thu thập mẫu sinh trắc học — vui lòng nhìn thẳng...", "#4cd7f6")
 
     @Slot()
     def _on_cancel(self) -> None:
         if self._collector and self._collector.isRunning():
             self._collector.stop()
         self._restore_controls()
-        self._set_status("Đã hủy thu thập mẫu.", "#fbbf24")
+        self._set_status("Đã hủy thu thập mẫu sinh trắc học.", "#fbbf24")
 
     @Slot(np.ndarray)
     def _on_preview(self, frame_bgr: np.ndarray) -> None:
-        """Hiển thị frame lên QLabel."""
+        """Hiển thị frame lên QLabel/VideoFrame."""
         h, w, ch = frame_bgr.shape
         rgb   = frame_bgr[:, :, ::-1].copy()
         q_img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
@@ -358,8 +493,8 @@ class EnrollView(QWidget):
         self._face_samples.append(face_crop)
         self._progress.setValue(count)
         self._set_status(
-            f"✅ Đã thu thập {count}/{_TARGET_SAMPLES} mẫu…",
-            "#4ade80",
+            f"✅ Hệ thống đã ghi nhận {count}/{_TARGET_SAMPLES} vector...",
+            "#4edea3",
         )
 
     @Slot(bool, str)
@@ -371,7 +506,7 @@ class EnrollView(QWidget):
             return
 
         # Đủ mẫu → tự động enroll
-        self._set_status("💾 Đang lưu vào hệ thống…", "#60a5fa")
+        self._set_status("💾 Đang mã hóa và lưu vector vào Database...", "#4cd7f6")
         self._do_enroll()
 
     def _do_enroll(self) -> None:
@@ -388,17 +523,17 @@ class EnrollView(QWidget):
 
         if result.success:
             self._set_status(
-                f"🎉 Đăng ký thành công!\n{result.message}",
-                "#4ade80",
+                f"🎉 Thiết lập thành công!\n{result.message}",
+                "#4edea3",
             )
             QMessageBox.information(
                 self,
                 "Thành công",
-                f"Đã đăng ký nhân viên:\n\n"
+                f"Đã đăng ký hồ sơ nhân viên:\n\n"
                 f"  Mã NV : {emp_code}\n"
                 f"  Họ tên: {name}\n"
                 f"  Phòng : {department or '—'}\n\n"
-                f"{result.embeddings_added} vector khuôn mặt đã lưu vào FAISS.",
+                f"Hệ thống đã lưu {result.embeddings_added} vector sinh trắc học vào FAISS.",
             )
             self.enrolled.emit(emp_code)
             self._btn_reset.setEnabled(True)
@@ -407,7 +542,7 @@ class EnrollView(QWidget):
             QMessageBox.warning(self, "Đăng ký thất bại", result.message)
             self._btn_reset.setEnabled(True)
 
-    # ── Helpers ─────────────────────────────────────────────────────────────
+    # ── Helpers Reset/Close ──────────────────────────────────────────────────
     def _restore_controls(self) -> None:
         self._btn_collect.setEnabled(True)
         self._btn_cancel.setEnabled(False)
@@ -416,12 +551,10 @@ class EnrollView(QWidget):
         self._dept_input.setEnabled(True)
 
     def _reset_form(self) -> None:
-        # 1. Đổi _worker thành _collector cho đúng với biến khai báo trong hàm _on_start_collect
         if self._collector and self._collector.isRunning():
             self._collector.stop()
         self._camera.stop()
         
-        # 2. Dùng biến _video_label thay vì _video_frame
         if hasattr(self, '_video_label') and hasattr(self._video_label, 'clear_frame'):
             self._video_label.clear_frame() 
 
@@ -431,14 +564,14 @@ class EnrollView(QWidget):
         self._dept_input.clear()
         self._progress.setValue(0)
         self._face_samples.clear()
-        self._set_status("Điền thông tin và nhấn 'Bắt đầu lấy mẫu'.", "#94a3b8")
+        self._set_status("Vui lòng điền thông tin và nhấn 'Bắt đầu lấy mẫu'.", "#94a3b8")
         self._btn_reset.setEnabled(False)
         self._emp_code_input.setFocus()
 
     def _set_status(self, text: str, color: str = "#94a3b8") -> None:
         self._status_label.setText(text)
         self._status_label.setStyleSheet(
-            f"color:{color}; font-size:12px; min-height:36px;"
+            f"color:{color}; font-size:13px; font-weight:600; min-height:40px; border:none;"
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -446,30 +579,3 @@ class EnrollView(QWidget):
             self._collector.stop()
         self._camera.stop()
         super().closeEvent(event)
-
-
-# ── Widget helpers ───────────────────────────────────────────────────────────
-def _labeled_input(label_text: str, placeholder: str, layout: QVBoxLayout) -> QLineEdit:
-    lbl = QLabel(label_text)
-    lbl.setStyleSheet("color:#cbd5e1; font-size:12px; font-weight:600;")
-    layout.addWidget(lbl)
-
-    inp = QLineEdit()
-    inp.setPlaceholderText(placeholder)
-    inp.setFixedHeight(36)
-    layout.addWidget(inp)
-    return inp
-
-
-def _divider() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.HLine)
-    line.setStyleSheet("DividerLine")
-    return line
-
-
-def _style_btn(btn: QPushButton, variant: str = "primary") -> None:
-    # Thay vì truyền mã màu Hex, ta dùng thuộc tính động (Dynamic Property) của Qt
-    btn.setProperty("class", variant)
-    btn.style().unpolish(btn)
-    btn.style().polish(btn)
