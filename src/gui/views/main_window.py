@@ -1,25 +1,23 @@
 """
 src/gui/views/main_window.py
-MainWindow — cửa sổ chính với sidebar điều hướng, 4 view, status bar realtime.
-closeEvent đảm bảo tắt sạch camera và AI thread.
+MainWindow — cửa sổ chính với sidebar điều hướng, 5 view, status bar realtime.
+Trang mặc định khi khởi động là HomeView (Dashboard tổng quan).
+closeEvent đảm bảo tắt sạch camera, AI thread và animation.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
-from src.gui.views.home_view import HomeView
-from src.gui.views.attendance_view import AttendanceView
-# ... các import khác giữ nguyên
 
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
-    QFrame,
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
@@ -33,18 +31,25 @@ from src.gui.views.attendance_view import AttendanceView
 from src.gui.views.employee_list_view import EmployeeListView
 from src.gui.views.enroll_view import EnrollView
 from src.gui.views.history_view import HistoryView
+from src.gui.views.home_view import HomeView
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # ── Nav items: (icon, label, index) ─────────────────────────────────────────
 _NAV_ITEMS = [
-    ("🏠", "Trang Chủ",   0),
-    ("🎯", "Điểm Danh",   1),
-    ("➕", "Đăng Ký NV",  2),
-    ("👥", "Nhân Viên",   3),
-    ("📋", "Lịch Sử",     4),
+    ("🏠", "Trang Chủ",  0),
+    ("🎯", "Điểm Danh",  1),
+    ("➕", "Đăng Ký NV", 2),
+    ("👥", "Nhân Viên",  3),
+    ("📋", "Lịch Sử",    4),
 ]
+
+_HOME_INDEX       = 0
+_ATTENDANCE_INDEX = 1
+_ENROLL_INDEX     = 2
+_EMPLOYEE_INDEX   = 3
+_HISTORY_INDEX    = 4
 
 
 class MainWindow(QMainWindow):
@@ -70,39 +75,36 @@ class MainWindow(QMainWindow):
         main_row.setContentsMargins(0, 0, 0, 0)
         main_row.setSpacing(0)
 
-        # ── Sidebar ────────────────────────────────────────────────────────
         sidebar = self._build_sidebar()
         main_row.addWidget(sidebar)
 
-        # ── Stacked pages ─────────────────────────────────────────────────
         self._stack = QStackedWidget()
         main_row.addWidget(self._stack, stretch=1)
 
-        # Khởi tạo và add 5 views
-        self._home_view         = HomeView(self)
-        self._attendance_view   = AttendanceView(self)
-        self._enroll_view       = EnrollView(self)
+        # ── Khởi tạo 5 views ───────────────────────────────────────────────
+        self._home_view          = HomeView(self)
+        self._attendance_view    = AttendanceView(self)
+        self._enroll_view        = EnrollView(self)
         self._employee_list_view = EmployeeListView(self)
-        self._history_view      = HistoryView(self)
+        self._history_view       = HistoryView(self)
 
         self._stack.addWidget(self._home_view)           # index 0
-        self._stack.addWidget(self._attendance_view)     # index 1
-        self._stack.addWidget(self._enroll_view)         # index 2
-        self._stack.addWidget(self._employee_list_view)  # index 3
-        self._stack.addWidget(self._history_view)        # index 4
+        self._stack.addWidget(self._attendance_view)      # index 1
+        self._stack.addWidget(self._enroll_view)          # index 2
+        self._stack.addWidget(self._employee_list_view)   # index 3
+        self._stack.addWidget(self._history_view)         # index 4
 
         # ── Kết nối Signals cross-view ────────────────────────────────────
+        self._home_view.navigate_requested.connect(self._switch_page)
         self._enroll_view.enrolled.connect(self._on_enrolled)
         self._employee_list_view.employee_deleted.connect(self._on_employee_deleted)
 
-        # Switch về tab đầu tiên
-        self._switch_page(0)
+        # Mặc định mở Trang Chủ
+        self._switch_page(_HOME_INDEX)
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
-        sidebar.setFixedWidth(240) # Mở rộng thêm một chút để chứa các thẻ
-        
-        # ÉP STYLE TRỰC TIẾP TẠI ĐÂY
+        sidebar.setFixedWidth(240)
         sidebar.setStyleSheet("""
             QFrame {
                 background-color: #0b1326;
@@ -114,30 +116,32 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Logo / Brand header
+        # ── Logo / Brand header ─────────────────────────────────────────
         brand = QFrame()
         brand.setFixedHeight(72)
         brand.setStyleSheet("border-bottom: 2px solid #2ca0ba; background: transparent;")
-        
+
         b_layout = QVBoxLayout(brand)
         b_layout.setContentsMargins(24, 12, 20, 12)
         b_layout.setSpacing(2)
 
         app_name = QLabel("FaceAttend")
-        app_name.setStyleSheet("color:#4cd7f6; font-size: 20px; font-weight: bold; letter-spacing: 1px; border: none;")
+        app_name.setStyleSheet(
+            "color:#4cd7f6; font-size:20px; font-weight:800; letter-spacing:1px; border:none;"
+        )
         b_layout.addWidget(app_name)
 
         app_sub = QLabel("SecureFace AI Engine")
-        app_sub.setStyleSheet("color:#8c909f; font-size: 11px; border: none;")
+        app_sub.setStyleSheet("color:#8c909f; font-size:11px; border:none;")
         b_layout.addWidget(app_sub)
 
         layout.addWidget(brand)
         layout.addSpacing(24)
 
-        # ── Vùng chứa các nút (Đã thêm lề và khoảng cách) ──
+        # ── Nav buttons ───────────────────────────────────────────────────
         nav_container = QVBoxLayout()
-        nav_container.setContentsMargins(16, 0, 16, 0) # Cách lề trái/phải 16px
-        nav_container.setSpacing(12) # Tách rời mỗi nút ra 12px
+        nav_container.setContentsMargins(16, 0, 16, 0)
+        nav_container.setSpacing(12)
 
         for icon, label, idx in _NAV_ITEMS:
             btn = _NavButton(icon, label)
@@ -148,10 +152,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(nav_container)
         layout.addStretch()
 
-        # Footer
         footer = QLabel("v1.0.0  •  ONNX Engine")
         footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet("color:#2ca0ba; font-size: 11px; padding: 16px; border: none; opacity: 0.6;")
+        footer.setStyleSheet("color:#2ca0ba; font-size:11px; padding:16px; border:none;")
         layout.addWidget(footer)
 
         return sidebar
@@ -189,10 +192,8 @@ class MainWindow(QMainWindow):
         self._tick_clock()
 
     @Slot()
-    def _tick_clock(self):
-        # Lấy chuỗi thời gian trước
+    def _tick_clock(self) -> None:
         time_str = datetime.now().strftime("%H:%M:%S  |  %d/%m/%Y")
-        # Nối cái icon đồng hồ vào sau bằng f-string
         self._sb_clock.setText(f"🕐  {time_str}")
 
     def _update_statusbar(self) -> None:
@@ -211,37 +212,49 @@ class MainWindow(QMainWindow):
     # ── Navigation ───────────────────────────────────────────────────────────
     def _switch_page(self, index: int) -> None:
         current_idx = self._stack.currentIndex()
+        if current_idx == index:
+            return   # Đã ở đúng tab, tránh restart camera/animation vô ích
 
-        # 1. ÉP TẮT CAMERA TRƯỚC KHI CHUYỂN TAB ĐỂ CHỐNG CRASH
-        if current_idx == 0 and index != 0:
+        # ── Dọn dẹp trang đang rời ──────────────────────────────────────
+        if current_idx == _HOME_INDEX:
+            try:
+                self._home_view.stop_animations()
+            except Exception as exc:
+                logger.warning("Lỗi khi dừng HomeView animation: %s", exc)
+
+        elif current_idx == _ATTENDANCE_INDEX:
             try:
                 self._attendance_view._on_stop()
-            except Exception as e:
-                logger.warning(f"Lỗi khi dừng AttendanceView: {e}")
-                
-        elif current_idx == 1 and index != 1:
+            except Exception as exc:
+                logger.warning("Lỗi khi dừng AttendanceView: %s", exc)
+
+        elif current_idx == _ENROLL_INDEX:
             try:
-                # Sửa lại thành gọi _on_cancel vì file enroll_view của bạn đang dùng hàm này
                 self._enroll_view._on_cancel()
                 self._enroll_view._reset_form()
-            except Exception as e:
-                logger.warning(f"Lỗi khi dừng EnrollView: {e}")
+            except Exception as exc:
+                logger.warning("Lỗi khi dừng EnrollView: %s", exc)
 
-        # 2. Chuyển tab
+        # ── Chuyển tab ────────────────────────────────────────────────────
         self._stack.setCurrentIndex(index)
 
         for i, btn in enumerate(self._nav_buttons):
             btn.set_active(i == index)
 
-        if index == 3:
+        # ── Side-effect khi vào trang mới ───────────────────────────────
+        if index == _HOME_INDEX:
+            self._home_view.resume_animations()
+        elif index == _HISTORY_INDEX:
             self._history_view.refresh()
+
+        self._update_statusbar()
 
     # ── Cross-view slots ─────────────────────────────────────────────────────
     @Slot(str)
     def _on_enrolled(self, emp_code: str) -> None:
         logger.info("MainWindow: đăng ký mới '%s'", emp_code)
         self._update_statusbar()
-        self._employee_list_view.load_data()   # Cập nhật danh sách NV
+        self._employee_list_view.load_data()
 
     @Slot(str)
     def _on_employee_deleted(self, emp_code: str) -> None:
@@ -252,27 +265,28 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         """
         Đảm bảo tắt hoàn toàn khi đóng cửa sổ:
-        1. Dừng AI Worker (QThread) của AttendanceView.
-        2. Dừng SampleCollector (QThread) của EnrollView.
-        3. Giải phóng cả 2 CameraStream.
-        4. Dừng QTimer đồng hồ.
+        1. Dừng animation + timer của HomeView.
+        2. Dừng AI Worker (QThread) của AttendanceView.
+        3. Dừng SampleCollector (QThread) của EnrollView.
+        4. Giải phóng cả 2 CameraStream.
+        5. Dừng QTimer đồng hồ chính.
         """
         logger.info("MainWindow: đang đóng ứng dụng…")
 
         self._clock_timer.stop()
 
-        # AttendanceView
+        try:
+            self._home_view.stop_animations()
+        except Exception as exc:
+            logger.warning("closeEvent: HomeView stop lỗi — %s", exc)
+
         try:
             self._attendance_view._on_stop()
         except Exception as exc:
             logger.warning("closeEvent: AttendanceView stop lỗi — %s", exc)
 
-        # EnrollView
         try:
-            if (
-                self._enroll_view._collector
-                and self._enroll_view._collector.isRunning()
-            ):
+            if self._enroll_view._collector and self._enroll_view._collector.isRunning():
                 self._enroll_view._collector.stop()
             if self._enroll_view._camera_started:
                 self._enroll_view._camera.stop()
@@ -294,7 +308,7 @@ class _NavButton(QPushButton):
             text-align: left;
             padding: 10px 16px;
             font-size: 14px;
-            font-weight: bold;
+            font-weight: 600;
         }
         QPushButton:hover {
             background-color: #161f2e;
@@ -311,7 +325,7 @@ class _NavButton(QPushButton):
             text-align: left;
             padding: 10px 16px;
             font-size: 14px;
-            font-weight: bold;
+            font-weight: 700;
         }
     """
 
@@ -323,6 +337,7 @@ class _NavButton(QPushButton):
 
     def set_active(self, active: bool) -> None:
         self.setStyleSheet(self._STYLE_ACTIVE if active else self._STYLE_NORMAL)
+
 
 # ── Status bar separator ─────────────────────────────────────────────────────
 def _sb_sep() -> QLabel:

@@ -1,138 +1,379 @@
 """
 src/gui/views/home_view.py
-Trang chủ (Dashboard) mang phong cách Cyberpunk / High-Tech.
+Trang chủ (Dashboard) — phong cách Cyberpunk / High-Tech "SecureFace AI Engine".
+
+Token hệ thống (đồng bộ với main_window.py):
+    Background sâu   : #0b1326 / #060e20
+    Surface           : #161f2e / #111828
+    Border / glow     : #2ca0ba / #1d6475
+    Accent chính (cyan): #4cd7f6
+    Accent phụ (xanh lá): #4edea3
+    Accent phụ (blue)  : #4d8eff
+    Text chính        : #f8fafc
+    Text phụ          : #8c909f
 """
+
 from __future__ import annotations
+
+from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QVBoxLayout, 
-    QWidget, QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
-    QProgressBar
+    QFrame,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
+from src.core.employee_manager import EmployeeManager
+from src.database.db_manager import DatabaseManager
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Signature element — Radar Scan Ring quanh icon mắt AI
+# ═══════════════════════════════════════════════════════════════════════════
+class _ScanRadar(QWidget):
+    """
+    Vòng quét radar xoay liên tục quanh icon trung tâm — đại diện cho việc
+    AI Engine luôn "đang quan sát". Đây là signature element của trang chủ:
+    duy nhất, có chủ đích, không lặp lại ở nơi khác trong app.
+    """
+
+    def __init__(self, size: int = 220, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._size  = size
+        self._angle = 0
+        self.setFixedSize(size, size)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._rotate)
+        self._timer.start(30)   # ~33 FPS — đủ mượt, nhẹ CPU
+
+    def _rotate(self) -> None:
+        self._angle = (self._angle + 2) % 360
+        self.update()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        cx, cy = self._size // 2, self._size // 2
+        r_outer = self._size // 2 - 4
+
+        # ── Vòng tròn tĩnh mờ (3 lớp đồng tâm) ────────────────────────────
+        for i, r_ratio in enumerate((1.0, 0.74, 0.48)):
+            alpha = 28 if i == 0 else 18
+            pen = QPen(QColor(44, 160, 186, alpha), 1.4)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            r = int(r_outer * r_ratio)
+            painter.drawEllipse(cx - r, cy - r, r * 2, r * 2)
+
+        # ── Vòng quét sáng (gradient theo góc, giả lập bằng arc) ──────────
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(self._angle)
+
+        sweep_pen = QPen(QColor(76, 215, 246, 180), 2.4)
+        painter.setPen(sweep_pen)
+        painter.drawArc(-r_outer, -r_outer, r_outer * 2, r_outer * 2, 0, 55 * 16)
+
+        # Điểm sáng đầu vòng quét
+        painter.setBrush(QColor(76, 215, 246))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(r_outer - 3, -3, 6, 6)
+        painter.restore()
+
+        # ── 4 tick nhỏ ở 0/90/180/270 độ ───────────────────────────────────
+        painter.setPen(QPen(QColor(140, 144, 159, 90), 1.2))
+        tick = 6
+        painter.drawLine(cx, cy - r_outer, cx, cy - r_outer + tick)
+        painter.drawLine(cx, cy + r_outer, cx, cy + r_outer - tick)
+        painter.drawLine(cx - r_outer, cy, cx - r_outer + tick, cy)
+        painter.drawLine(cx + r_outer, cy, cx + r_outer - tick, cy)
+
+        painter.end()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HomeView
+# ═══════════════════════════════════════════════════════════════════════════
 class HomeView(QWidget):
+    """
+    Dashboard tổng quan: trạng thái AI Engine, thông số hệ thống,
+    nhật ký điểm danh gần nhất (data thật từ DB).
+    """
+
+    navigate_requested = Signal(int)   # Phát ra index tab muốn chuyển tới
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._db      = DatabaseManager.instance()
+        self._manager = EmployeeManager.instance()
         self._build_ui()
+        self._setup_refresh_timer()
+        self.refresh_data()
 
+    # ── UI Root ──────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # =========================================================
-        # 1. TOP APP BAR (Header)
-        # =========================================================
-        self.header_frame = QFrame()
-        self.header_frame.setFixedHeight(72)
-        self.header_frame.setStyleSheet("""
+        main_layout.addWidget(self._build_header())
+
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(32, 24, 32, 32)
+        content_layout.setSpacing(24)
+
+        content_layout.addLayout(self._build_left_column(), stretch=2)
+        content_layout.addLayout(self._build_right_column(), stretch=1)
+
+        main_layout.addWidget(content, stretch=1)
+
+    # ── Header ───────────────────────────────────────────────────────────────
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setFixedHeight(76)
+        header.setStyleSheet("""
             QFrame {
                 background-color: #0b1326;
                 border-bottom: 2px solid #2ca0ba;
             }
         """)
-        
-        header_layout = QHBoxLayout(self.header_frame)
-        header_layout.setContentsMargins(32, 0, 32, 0)
-        
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(32, 0, 32, 0)
+
         title_box = QVBoxLayout()
+        title_box.setSpacing(4)
         title_box.setAlignment(Qt.AlignVCenter)
+
         title_label = QLabel("Bảng Điều Khiển Hệ Thống")
-        title_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #f8fafc;")
-        
-        status_layout = QHBoxLayout()
-        status_dot = QLabel("●")
-        status_dot.setStyleSheet("color: #4cd7f6; font-weight: bold;")
-        status_text = QLabel("Hệ Thống Hoạt Động  |  FPS: 30  |  Engine: ONNX")
-        status_text.setStyleSheet("color: #8c909f;")
-        status_layout.addWidget(status_dot)
-        status_layout.addWidget(status_text)
-        status_layout.addStretch()
-        
+        title_label.setStyleSheet(
+            "font-size: 22px; font-weight: 700; color: #f8fafc; letter-spacing: 0.3px;"
+        )
         title_box.addWidget(title_label)
-        title_box.addLayout(status_layout)
-        header_layout.addLayout(title_box)
-        header_layout.addStretch()
 
-        user_info = QLabel("Admin User\nID: 10294")
-        user_info.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        user_info.setStyleSheet("color: #4cd7f6; font-weight: bold;")
-        header_layout.addWidget(user_info)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self._status_dot = QLabel("●")
+        self._status_dot.setStyleSheet("color: #4edea3; font-weight: bold; font-size: 11px;")
+        self._status_text = QLabel("Hệ thống hoạt động  •  Engine: ONNX Runtime")
+        self._status_text.setStyleSheet("color: #8c909f; font-size: 12px;")
+        status_row.addWidget(self._status_dot)
+        status_row.addWidget(self._status_text)
+        status_row.addStretch()
+        title_box.addLayout(status_row)
 
-        main_layout.addWidget(self.header_frame)
+        layout.addLayout(title_box)
+        layout.addStretch()
 
-        # =========================================================
-        # 2. KHU VỰC NỘI DUNG CHÍNH (Chia 2 cột)
-        # =========================================================
-        content_container = QWidget()
-        content_layout = QHBoxLayout(content_container)
-        content_layout.setContentsMargins(32, 24, 32, 32)
-        content_layout.setSpacing(24)
+        # Đồng hồ realtime nhỏ bên phải (đồng bộ cảm giác với status bar)
+        self._header_clock = QLabel()
+        self._header_clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._header_clock.setStyleSheet(
+            "color: #4cd7f6; font-weight: 600; font-size: 13px; font-family: Consolas, monospace;"
+        )
+        layout.addWidget(self._header_clock)
 
-        # ─── CỘT TRÁI (Tỷ lệ 2) ──────────────────────────────────
-        left_col = QVBoxLayout()
-        left_col.setSpacing(24)
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._tick_header_clock)
+        self._clock_timer.start(1000)
+        self._tick_header_clock()
 
-        # A. AI Core Engine
-        ai_core_frame = QFrame()
-        ai_core_frame.setStyleSheet("""
+        return header
+
+    @Slot()
+    def _tick_header_clock(self) -> None:
+        now = datetime.now()
+        self._header_clock.setText(now.strftime("%H:%M:%S  •  %d/%m/%Y"))
+
+    # ── Cột trái: AI Core + Stat cards ──────────────────────────────────────
+    def _build_left_column(self) -> QVBoxLayout:
+        col = QVBoxLayout()
+        col.setSpacing(24)
+
+        col.addWidget(self._build_ai_core_card(), stretch=5)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(16)
+
+        self._card_total_nv  = self._build_stat_card("Tổng Nhân Viên", "—", "#4cd7f6")
+        self._card_today     = self._build_stat_card("Điểm Danh Hôm Nay", "—", "#4edea3")
+        self._card_session   = self._build_stat_card("Ca Đang Mở", "—", "#4d8eff")
+
+        stats_row.addWidget(self._card_total_nv)
+        stats_row.addWidget(self._card_today)
+        stats_row.addWidget(self._card_session)
+
+        col.addLayout(stats_row, stretch=1)
+        return col
+
+    def _build_ai_core_card(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet("""
             QFrame {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #060e20, stop:1 #0f1e3c);
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #060e20, stop:1 #0f1e3c
+                );
                 border: 2px solid #2ca0ba;
                 border-radius: 16px;
             }
         """)
-        ai_core_layout = QVBoxLayout(ai_core_frame)
-        ai_core_layout.setAlignment(Qt.AlignCenter)
-        ai_core_layout.setSpacing(20)
+        outer = QVBoxLayout(frame)
+        outer.setAlignment(Qt.AlignCenter)
+        outer.setSpacing(18)
+        outer.setContentsMargins(40, 32, 40, 32)
 
-        core_icon = QLabel("👁️")
-        font = core_icon.font()
-        font.setPointSize(48)
-        core_icon.setFont(font)
-        core_icon.setAlignment(Qt.AlignCenter)
-        
+        # ── Signature: Radar quét quanh icon ──────────────────────────────
+        radar_wrapper = QWidget()
+        radar_layout  = QVBoxLayout(radar_wrapper)
+        radar_layout.setAlignment(Qt.AlignCenter)
+        radar_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._radar = _ScanRadar(size=200)
+        radar_layout.addWidget(self._radar, alignment=Qt.AlignCenter)
+
+        # Icon mắt đặt đè lên giữa radar bằng absolute-ish trick: overlay riêng
+        eye_label = QLabel("👁")
+        eye_font = QFont()
+        eye_font.setPointSize(40)
+        eye_label.setFont(eye_font)
+        eye_label.setAlignment(Qt.AlignCenter)
+        eye_label.setStyleSheet("background: transparent;")
+        eye_label.setFixedSize(200, 200)
+        eye_label.setParent(radar_wrapper)
+        eye_label.move(0, 0)
+        eye_label.raise_()
+
+        outer.addWidget(radar_wrapper, alignment=Qt.AlignCenter)
+
         core_title = QLabel("SECUREFACE AI ENGINE")
         core_title.setAlignment(Qt.AlignCenter)
-        core_title.setStyleSheet("color: #4cd7f6; font-size: 24px; font-weight: bold; letter-spacing: 4px;")
-        
-        core_status = QLabel("[ TRẠNG THÁI: SẴN SÀNG NHẬN DIỆN ]")
-        core_status.setStyleSheet("color: #4edea3; font-weight: bold;")
-        core_status.setAlignment(Qt.AlignCenter)
+        core_title.setStyleSheet(
+            "color: #4cd7f6; font-size: 22px; font-weight: 800; letter-spacing: 4px;"
+        )
+        outer.addWidget(core_title)
 
-        progress_layout = QVBoxLayout()
-        progress_layout.setContentsMargins(40, 20, 40, 0)
-        progress_layout.setSpacing(12)
-        
-        progress_layout.addWidget(self._create_loading_bar("Tải Mô Hình Anti-Spoofing (YOLOv8)", 100))
-        progress_layout.addWidget(self._create_loading_bar("Tải Mô Hình InsightFace", 100))
-        progress_layout.addWidget(self._create_loading_bar("Đồng Bộ FAISS Vector Database", 100))
+        self._core_status = QLabel("[ TRẠNG THÁI: SẴN SÀNG NHẬN DIỆN ]")
+        self._core_status.setStyleSheet("color: #4edea3; font-weight: 700; font-size: 13px;")
+        self._core_status.setAlignment(Qt.AlignCenter)
+        outer.addWidget(self._core_status)
 
-        ai_core_layout.addStretch()
-        ai_core_layout.addWidget(core_icon)
-        ai_core_layout.addWidget(core_title)
-        ai_core_layout.addWidget(core_status)
-        ai_core_layout.addLayout(progress_layout)
-        ai_core_layout.addStretch()
-        
-        left_col.addWidget(ai_core_frame, stretch=5)
+        # ── Loading bars ────────────────────────────────────────────────────
+        bars_wrap = QVBoxLayout()
+        bars_wrap.setContentsMargins(40, 12, 40, 0)
+        bars_wrap.setSpacing(10)
 
-        # B. Thanh thông số kỹ thuật
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(16)
-        
-        stats_layout.addWidget(self._create_stat_card("CPU Usage", "15%", "#4cd7f6"))
-        stats_layout.addWidget(self._create_stat_card("RAM Allocation", "1.2 GB", "#4d8eff"))
-        stats_layout.addWidget(self._create_stat_card("Latency", "12 ms", "#4edea3"))
-        
-        left_col.addLayout(stats_layout, stretch=1)
+        bars_wrap.addWidget(self._create_loading_bar("Mô hình Anti-Spoofing (YOLOv8)", 100))
+        bars_wrap.addWidget(self._create_loading_bar("Mô hình InsightFace", 100))
+        bars_wrap.addWidget(self._create_loading_bar("Đồng bộ FAISS Vector DB", 100))
 
-        # ─── CỘT PHẢI (Tỷ lệ 1) ──────────────────────────────────
-        right_col = QVBoxLayout()
-        
+        outer.addLayout(bars_wrap)
+
+        # ── CTA: đi tới Điểm danh ───────────────────────────────────────────
+        btn_go = QPushButton("▶  Bắt Đầu Điểm Danh")
+        btn_go.setCursor(Qt.PointingHandCursor)
+        btn_go.setFixedHeight(42)
+        btn_go.setMinimumWidth(220)
+        btn_go.setStyleSheet("""
+            QPushButton {
+                background-color: #4cd7f6;
+                color: #0b1326;
+                border: none;
+                border-radius: 10px;
+                font-weight: 700;
+                font-size: 13px;
+                padding: 0 24px;
+            }
+            QPushButton:hover { background-color: #6fe2ff; }
+            QPushButton:pressed { background-color: #2ca0ba; }
+        """)
+        btn_go.clicked.connect(lambda: self.navigate_requested.emit(1))
+        outer.addWidget(btn_go, alignment=Qt.AlignCenter)
+
+        return frame
+
+    def _build_stat_card(self, title: str, value: str, value_color: str) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #161f2e;
+                border: 1px solid #1d6475;
+                border-radius: 16px;
+            }
+            QFrame:hover {
+                border: 1px solid #2ca0ba;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(6)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("color: #8c909f; font-size: 12px;")
+
+        lbl_value = QLabel(value)
+        lbl_value.setObjectName("stat_value")
+        lbl_value.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {value_color};")
+
+        layout.addWidget(lbl_title)
+        layout.addWidget(lbl_value)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return card
+
+    def _create_loading_bar(self, label_text: str, value: int) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("color: #8c909f; font-size: 12px;")
+        lbl.setFixedWidth(210)
+
+        bar = QProgressBar()
+        bar.setValue(value)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(8)
+        bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #0e1627;
+                border: 1px solid #122e38;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #4cd7f6;
+                border-radius: 3px;
+            }
+        """)
+
+        layout.addWidget(lbl)
+        layout.addWidget(bar)
+        return widget
+
+    # ── Cột phải: Nhật ký điểm danh ──────────────────────────────────────────
+    def _build_right_column(self) -> QVBoxLayout:
+        col = QVBoxLayout()
+
         log_frame = QFrame()
         log_frame.setStyleSheet("""
             QFrame {
@@ -145,12 +386,24 @@ class HomeView(QWidget):
         log_layout.setContentsMargins(20, 20, 20, 20)
         log_layout.setSpacing(16)
 
-        log_title = QLabel("Nhật Ký Điểm Danh (Gần Đây)")
-        log_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #f8fafc;")
-        log_layout.addWidget(log_title)
+        title_row = QHBoxLayout()
+        log_title = QLabel("Nhật Ký Điểm Danh Gần Đây")
+        log_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
+        title_row.addWidget(log_title)
+        title_row.addStretch()
 
-        self.log_table = QTableWidget(4, 3) 
-        self.log_table.setStyleSheet("""
+        self._log_count_badge = QLabel("0")
+        self._log_count_badge.setAlignment(Qt.AlignCenter)
+        self._log_count_badge.setFixedSize(28, 22)
+        self._log_count_badge.setStyleSheet("""
+            background-color: #0e2a32; color: #4cd7f6;
+            border-radius: 11px; font-size: 11px; font-weight: 700;
+        """)
+        title_row.addWidget(self._log_count_badge)
+        log_layout.addLayout(title_row)
+
+        self._log_table = QTableWidget(0, 3)
+        self._log_table.setStyleSheet("""
             QTableWidget {
                 background-color: transparent;
                 alternate-background-color: #0d1720;
@@ -169,52 +422,55 @@ class HomeView(QWidget):
             QHeaderView::section {
                 background-color: #111828;
                 color: #8c909f;
-                font-weight: bold;
+                font-weight: 700;
                 border: none;
                 border-bottom: 1px solid #102630;
                 padding: 10px;
-                text-transform: uppercase;
+                font-size: 11px;
             }
         """)
-        self.log_table.verticalHeader().setVisible(False)
-        self.log_table.setHorizontalHeaderLabels(["NV", "Họ Tên / ID", "Giờ"])
-        self.log_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.log_table.setShowGrid(False)
+        self._log_table.verticalHeader().setVisible(False)
+        self._log_table.setHorizontalHeaderLabels(["", "Họ Tên / Mã NV", "Giờ"])
+        self._log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._log_table.setShowGrid(False)
+        self._log_table.setAlternatingRowColors(True)
 
-        header = self.log_table.horizontalHeader()
+        header = self._log_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
 
-        mock_data = [
-            ("NV003", "Nguyễn Văn A", "08:15:22"),
-            ("NV012", "Trần Thị B", "08:16:45"),
-            ("NV045", "Lê Minh C", "08:20:10"),
-            ("NV089", "Phạm Hoàng D", "08:22:30")
-        ]
-        for row, (uid, name, time_str) in enumerate(mock_data):
-            self.log_table.setItem(row, 0, QTableWidgetItem("👤"))
-            self.log_table.setItem(row, 1, QTableWidgetItem(f"{name}\nID: {uid}"))
-            self.log_table.setItem(row, 2, QTableWidgetItem(time_str))
+        log_layout.addWidget(self._log_table)
 
-        log_layout.addWidget(self.log_table)
+        # Empty-state label (hiện khi chưa có log nào)
+        self._log_empty_label = QLabel("Chưa có lượt điểm danh nào hôm nay.")
+        self._log_empty_label.setAlignment(Qt.AlignCenter)
+        self._log_empty_label.setStyleSheet("color: #475569; font-size: 12px; padding: 24px 0;")
+        self._log_empty_label.hide()
+        log_layout.addWidget(self._log_empty_label)
 
         btn_layout = QHBoxLayout()
-        btn_stop = QPushButton("Kết Thúc Ca")
-        btn_stop.setMinimumHeight(40)
-        btn_stop.setStyleSheet("""
+        btn_layout.setSpacing(10)
+
+        btn_history = QPushButton("Xem Toàn Bộ Lịch Sử")
+        btn_history.setCursor(Qt.PointingHandCursor)
+        btn_history.setMinimumHeight(40)
+        btn_history.setStyleSheet("""
             QPushButton {
                 background-color: #334155;
                 color: #e2e8f0;
                 border: 1px solid #475569;
                 border-radius: 8px;
-                font-weight: bold;
+                font-weight: 600;
+                font-size: 12px;
             }
             QPushButton:hover { background-color: #475569; }
         """)
-        
-        btn_refresh = QPushButton("Làm Mới")
+        btn_history.clicked.connect(lambda: self.navigate_requested.emit(4))
+
+        btn_refresh = QPushButton("↺  Làm Mới")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
         btn_refresh.setMinimumHeight(40)
         btn_refresh.setStyleSheet("""
             QPushButton {
@@ -222,75 +478,110 @@ class HomeView(QWidget):
                 color: #4cd7f6;
                 border: 1px solid #4cd7f6;
                 border-radius: 8px;
-                font-weight: bold;
+                font-weight: 700;
+                font-size: 12px;
             }
             QPushButton:hover {
                 background-color: #4cd7f6;
                 color: #0b1326;
             }
         """)
-        
-        btn_layout.addWidget(btn_stop)
+        btn_refresh.clicked.connect(self.refresh_data)
+
+        btn_layout.addWidget(btn_history)
         btn_layout.addWidget(btn_refresh)
         log_layout.addLayout(btn_layout)
 
-        right_col.addWidget(log_frame)
+        col.addWidget(log_frame)
+        return col
 
-        # ─── GỘP VÀO MAIN LAYOUT ─────────────────────────────────
-        content_layout.addLayout(left_col, stretch=2)
-        content_layout.addLayout(right_col, stretch=1)
-        
-        main_layout.addWidget(content_container, stretch=1)
+    # ── Data binding (thật, không mock) ─────────────────────────────────────
+    def _setup_refresh_timer(self) -> None:
+        """Tự refresh mỗi 10 giây để cập nhật nhật ký mới nhất."""
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self.refresh_data)
+        self._refresh_timer.start(10_000)
 
-    def _create_stat_card(self, title: str, value: str, value_color: str) -> QFrame:
-        card = QFrame()
-        card.setStyleSheet("""
-            QFrame {
-                background-color: #161f2e;
-                border: 1px solid #1d6475;
-                border-radius: 16px;
-            }
-        """)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 16)
-        
-        lbl_title = QLabel(title)
-        lbl_title.setStyleSheet("color: #8c909f;")
-        
-        lbl_value = QLabel(value)
-        lbl_value.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {value_color};")
-        
-        layout.addWidget(lbl_title)
-        layout.addWidget(lbl_value)
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        return card
+    @Slot()
+    def refresh_data(self) -> None:
+        try:
+            self._refresh_stat_cards()
+            self._refresh_log_table()
+        except Exception as exc:
+            logger.exception("HomeView: lỗi refresh dữ liệu")
 
-    def _create_loading_bar(self, label_text: str, value: int) -> QWidget:
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        lbl = QLabel(label_text)
-        lbl.setStyleSheet("color: #8c909f;")
-        lbl.setFixedWidth(200)
-        
-        bar = QProgressBar()
-        bar.setValue(value)
-        bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #0e1627;
-                border: 1px solid #122e38;
-                border-radius: 4px;
-                text-align: center;
-                color: transparent; 
-                max-height: 8px;
-            }
-            QProgressBar::chunk {
-                background-color: #4cd7f6; 
-                border-radius: 3px;
-            }
-        """)
-        
-        layout.addWidget(lbl)
-        layout.addWidget(bar)
-        return widget
+    def _refresh_stat_cards(self) -> None:
+        # Tổng nhân viên (active trong DB)
+        employees = self._db.get_all_employees(active_only=True)
+        self._set_stat_value(self._card_total_nv, str(len(employees)))
+
+        # Ca đang mở
+        active_session = self._db.get_active_session()
+        if active_session:
+            self._set_stat_value(self._card_session, active_session.session_name)
+            self._core_status.setText("[ TRẠNG THÁI: ĐANG ĐIỂM DANH ]")
+            self._status_dot.setStyleSheet("color: #4cd7f6; font-weight: bold; font-size: 11px;")
+            self._status_text.setText("Ca làm việc đang mở  •  Engine: ONNX Runtime")
+        else:
+            self._set_stat_value(self._card_session, "Không có")
+            self._core_status.setText("[ TRẠNG THÁI: SẴN SÀNG NHẬN DIỆN ]")
+            self._status_dot.setStyleSheet("color: #4edea3; font-weight: bold; font-size: 11px;")
+            self._status_text.setText("Hệ thống hoạt động  •  Engine: ONNX Runtime")
+
+        # Điểm danh hôm nay
+        if active_session:
+            attendances = self._db.get_attendance_by_session(active_session.id)
+            today_count = len(attendances)
+        else:
+            today_count = 0
+        self._set_stat_value(self._card_today, str(today_count))
+
+    def _set_stat_value(self, card: QFrame, text: str) -> None:
+        value_label = card.findChild(QLabel, "stat_value")
+        if value_label:
+            value_label.setText(text)
+
+    def _refresh_log_table(self) -> None:
+        active_session = self._db.get_active_session()
+        rows: list[tuple[str, str, str]] = []
+
+        if active_session:
+            attendances = self._db.get_attendance_by_session(active_session.id)
+            # Mới nhất lên trước, lấy tối đa 8 dòng
+            for att in reversed(attendances[-8:]):
+                emp = att.employee
+                name = emp.name if emp else "—"
+                code = emp.emp_code if emp else "—"
+                time_str = att.timestamp.strftime("%H:%M:%S")
+                rows.append(("👤", f"{name}\nID: {code}", time_str))
+
+        self._log_count_badge.setText(str(len(rows)))
+        self._log_table.setRowCount(0)
+
+        if not rows:
+            self._log_table.hide()
+            self._log_empty_label.show()
+            return
+
+        self._log_table.show()
+        self._log_empty_label.hide()
+
+        for row_idx, (icon, name_id, time_str) in enumerate(rows):
+            self._log_table.insertRow(row_idx)
+            self._log_table.setItem(row_idx, 0, QTableWidgetItem(icon))
+            self._log_table.setItem(row_idx, 1, QTableWidgetItem(name_id))
+            self._log_table.setItem(row_idx, 2, QTableWidgetItem(time_str))
+
+    # ── Cleanup ──────────────────────────────────────────────────────────────
+    def stop_animations(self) -> None:
+        """Gọi khi rời trang để tắt radar + timer, tránh tốn CPU ngầm."""
+        self._radar.stop()
+        self._clock_timer.stop()
+        self._refresh_timer.stop()
+
+    def resume_animations(self) -> None:
+        """Gọi khi quay lại trang chủ."""
+        self._radar._timer.start(30)
+        self._clock_timer.start(1000)
+        self._refresh_timer.start(10_000)
+        self.refresh_data()
