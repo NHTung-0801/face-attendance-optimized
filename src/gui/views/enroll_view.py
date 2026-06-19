@@ -1,8 +1,7 @@
 """
 src/gui/views/enroll_view.py
 EnrollView — Đăng ký khuôn mặt nhân viên mới.
-Thu thập 15 mẫu qua CameraStream, validate qua FaceRecognizer, lưu qua EmployeeManager.
-Phong cách đồng bộ SecureFace AI Engine (Cyberpunk / High-Tech).
+Thu thập 15 mẫu qua CameraStream, với bộ lọc realtime 3 lớp: Người thực -> Không giả mạo -> Không trùng lặp.
 """
 
 from __future__ import annotations
@@ -10,8 +9,9 @@ import time
 from typing import Optional
 
 import numpy as np
+import cv2
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QFont, QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -29,12 +29,13 @@ from src.gui.components.video_frame import VideoFrame
 from src.core.camera_stream import CameraStream
 from src.core.employee_manager import EmployeeManager
 from src.core.face_recognizer import FaceRecognizer
+from src.core.anti_spoofing import AntiSpoofing, SpoofResult
 from src.utils.config import (
-    DISPLAY_HEIGHT,
-    DISPLAY_WIDTH,
     ENROLL_CAPTURE_COUNT,
     ENROLL_CAPTURE_INTERVAL,
     FACE_DET_SCORE_THRESHOLD,
+    DISPLAY_WIDTH,    # <-- THÊM DÒNG NÀY
+    DISPLAY_HEIGHT,   # <-- THÊM DÒNG NÀY
 )
 from src.utils.logger import get_logger
 
@@ -42,18 +43,36 @@ logger = get_logger(__name__)
 
 _TARGET_SAMPLES = ENROLL_CAPTURE_COUNT   # Mặc định: 15 mẫu
 
+# ── Helpers IoU để map khuôn mặt và kết quả Anti-Spoofing ──────────────────
+def _calc_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return inter / union
+
+def _find_matching_spoof(
+    bbox: tuple[int, int, int, int],
+    spoof_results: list[SpoofResult],
+    iou_threshold: float = 0.3,
+) -> Optional[SpoofResult]:
+    best, best_iou = None, 0.0
+    for sr in spoof_results:
+        if sr.bbox is None:
+            continue
+        iou = _calc_iou(bbox, sr.bbox)
+        if iou > best_iou:
+            best_iou, best = iou, sr
+    return best if best_iou >= iou_threshold else None
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Worker thread thu thập mẫu (Giữ nguyên logic lõi)
+# Worker thread thu thập mẫu với Bộ Lọc 3 Lớp
 # ═══════════════════════════════════════════════════════════════════════════
 class _SampleCollector(QThread):
-    """
-    Chạy trong thread riêng:
-    - Liên tục đọc frame từ CameraStream.
-    - Mỗi ENROLL_CAPTURE_INTERVAL frame, kiểm tra có khuôn mặt rõ không.
-    - Phát tiếng bíp/delay nhẹ để nhịp độ thu thập rõ ràng.
-    """
-
     preview_ready: Signal = Signal(np.ndarray)
     sample_captured: Signal = Signal(np.ndarray, int)
     finished: Signal = Signal(bool, str)
@@ -62,6 +81,7 @@ class _SampleCollector(QThread):
         super().__init__(parent)
         self._camera     = camera
         self._recognizer = FaceRecognizer.instance()
+        self._spoofing   = AntiSpoofing.instance()
         self._running    = False
         self._tick       = 0
         self._count      = 0
@@ -70,8 +90,14 @@ class _SampleCollector(QThread):
         self._running = True
         self._tick    = 0
         self._count   = 0
+        last_capture  = 0.0
 
-        logger.info("SampleCollector: bat dau thu thap %d mau.", _TARGET_SAMPLES)
+        # --- BỔ SUNG BỘ NHỚ ĐỆM (CACHE) KHUNG VIỀN ---
+        last_bbox  = None
+        last_text  = ""
+        last_color = (0, 0, 0)
+
+        logger.info("SampleCollector: Bắt đầu thu thập %d mẫu.", _TARGET_SAMPLES)
 
         while self._running and self._count < _TARGET_SAMPLES:
             frame = self._camera.get_frame(timeout=0.05)
@@ -80,78 +106,86 @@ class _SampleCollector(QThread):
 
             self._tick += 1
             annotated = frame.copy()
+            now = time.time()
 
-            # Chỉ đưa vào AI phân tích sau mỗi N frame
-            if self._tick % ENROLL_CAPTURE_INTERVAL == 0:
+            is_cooldown = (now - last_capture) < 0.5
+            run_ai = not is_cooldown and (self._tick % ENROLL_CAPTURE_INTERVAL == 0)
+
+            # CHỈ CHẠY AI VÀ CẬP NHẬT CACHE MỖI 5 FRAME
+            if run_ai:
                 detections = self._recognizer.get_embeddings_from_frame(frame)
 
                 if detections:
-                    # Lấy khuôn mặt rõ nhất
                     detections.sort(key=lambda d: d[2], reverse=True)
-                    _, bbox, det_score = detections[0]
-                    x1, y1, x2, y2 = bbox
+                    emb, bbox, det_score = detections[0]
+                    last_bbox = bbox
 
-                    import cv2
-                    # Vẽ khung nhận diện
-                    color = (0, 255, 0) if det_score >= FACE_DET_SCORE_THRESHOLD else (0, 165, 255)
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-
-                    if det_score >= FACE_DET_SCORE_THRESHOLD:
-                        # 1. TĂNG BIẾN ĐẾM (Chỉ khi đủ điều kiện)
-                        self._count += 1
-                        cv2.putText(
-                            annotated,
-                            f"Thanh cong: {self._count}/{_TARGET_SAMPLES}",
-                            (x1, max(y1 - 10, 20)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
-                        )
-
-                        # Phát ảnh lên UI ngay để người dùng thấy khung xanh
-                        self.preview_ready.emit(annotated)
-
-                        # 2. GỬI FULL FRAME (Tuyệt đối không crop ảnh)
-                        self.sample_captured.emit(frame.copy(), self._count)
-                        logger.debug("SampleCollector: mau %d/%d", self._count, _TARGET_SAMPLES)
-
-                        # 3. NHỊP DỪNG (Cooldown)
-                        time.sleep(0.5)
-                        continue  # Bỏ qua dòng emit preview ở cuối vì đã emit rồi
+                    if det_score < FACE_DET_SCORE_THRESHOLD:
+                        last_text, last_color = "Khuon mat chua ro!", (0, 165, 255)
                     else:
-                        cv2.putText(
-                            annotated,
-                            "Khuon mat chua ro",
-                            (x1, max(y1 - 10, 20)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
-                        )
-                else:
-                    import cv2
-                    cv2.putText(
-                        annotated,
-                        "Khong tim thay khuon mat",
-                        (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2,
-                    )
+                        spoof_results = self._spoofing.detect_spoof(frame)
+                        matched_spoof = _find_matching_spoof(bbox, spoof_results)
+                        is_real = matched_spoof.is_real if matched_spoof else True
 
-            # Phát ảnh liên tục để camera không bị giật
-            self.preview_ready.emit(annotated)
+                        if not is_real:
+                            last_text, last_color = "CANH BAO GIA MAO!", (0, 0, 255)
+                        else:
+                            matches = self._recognizer.identify_face(emb)
+                            is_duplicate = False
+                            dup_code = ""
+                            
+                            if matches:
+                                match_code, similarity = matches[0]
+                                is_duplicate = True
+                                dup_code = match_code
+
+                            if is_duplicate:
+                                last_text, last_color = f"Da ton tai ({dup_code})", (0, 0, 255)
+                            else:
+                                self._count += 1
+                                last_capture = now
+                                last_text, last_color = f"Hop le: {self._count}/{_TARGET_SAMPLES}", (0, 255, 0)
+                                self.sample_captured.emit(frame.copy(), self._count)
+                else:
+                    last_bbox = None
+                    last_text = "Khong tim thay khuon mat"
+                    last_color = (0, 0, 255)
+
+            # --- VẼ LÊN FRAME TỪ CACHE MỖI MILI-GIÂY (Khắc phục chớp tắt) ---
+            if last_bbox is not None:
+                x1, y1, x2, y2 = last_bbox
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), last_color, 2)
+                cv2.putText(annotated, last_text, (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, last_color, 2)
+            elif last_text == "Khong tim thay khuon mat":
+                cv2.putText(annotated, last_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, last_color, 2)
+
+            # --- TỐI ƯU HIỆU NĂNG: Xử lý Letterbox ngầm ---
+            h, w = annotated.shape[:2]
+            scale = min(DISPLAY_WIDTH / w, DISPLAY_HEIGHT / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            
+            resized = cv2.resize(annotated, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            canvas = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
+            pad_x = (DISPLAY_WIDTH - new_w) // 2
+            pad_y = (DISPLAY_HEIGHT - new_h) // 2
+            canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
+            
+            rgb_frame = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+            self.preview_ready.emit(rgb_frame)
 
         if self._count >= _TARGET_SAMPLES:
-            self.finished.emit(True, f"Da thu thap du {_TARGET_SAMPLES} mau.")
+            self.finished.emit(True, f"Đã thu thập đủ {_TARGET_SAMPLES} mẫu.")
         else:
-            self.finished.emit(False, "Thu thap bi huy.")
-
-        logger.info("SampleCollector: ket thuc (%d mau).", self._count)
+            self.finished.emit(False, "Thu thập bị hủy.")
 
     def stop(self) -> None:
         self._running = False
         self.wait(2000)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
-# EnrollView (Giao diện đã nâng cấp)
+# EnrollView (Giao diện)
 # ═══════════════════════════════════════════════════════════════════════════
 class EnrollView(QWidget):
-    # Emit khi đăng ký thành công (để MainWindow cập nhật status bar)
     enrolled = Signal(str)   # emp_code
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -165,7 +199,6 @@ class EnrollView(QWidget):
 
         self._build_ui()
 
-    # ── Xây dựng UI Đồng bộ ──────────────────────────────────────────────────
     def _build_ui(self) -> None:
         self.setStyleSheet("background-color: #0b1326;")
 
@@ -173,24 +206,18 @@ class EnrollView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 1. Header phân hệ
         root.addWidget(self._build_header())
 
-        # Khung chứa nội dung chính
         body = QWidget()
         body_layout = QHBoxLayout(body)
         body_layout.setContentsMargins(28, 24, 28, 28)
         body_layout.setSpacing(24)
 
-        # 2. Cột trái (Thẻ Camera thu thập) - Stretch 5
         body_layout.addWidget(self._build_camera_card(), stretch=5)
-        
-        # 3. Cột phải (Thẻ Form thông tin) - Stretch 4
         body_layout.addWidget(self._build_form_card(), stretch=4)
 
         root.addWidget(body, stretch=1)
 
-    # ── Phân hệ Header ───────────────────────────────────────────────────────
     def _build_header(self) -> QFrame:
         header = QFrame()
         header.setFixedHeight(76)
@@ -219,10 +246,8 @@ class EnrollView(QWidget):
 
         layout.addLayout(title_box)
         layout.addStretch()
-
         return header
 
-    # ── Thẻ Camera (Camera Card) ─────────────────────────────────────────────
     def _build_camera_card(self) -> QFrame:
         card = QFrame()
         card.setStyleSheet("""
@@ -240,9 +265,7 @@ class EnrollView(QWidget):
         title.setStyleSheet("color: #4cd7f6; font-size: 12px; font-weight: 700; letter-spacing: 1px; border: none;")
         layout.addWidget(title)
 
-        # Video Frame container
         self._video_label = VideoFrame()
-        self._video_label.setStyleSheet("border: 1px solid #102630; border-radius: 8px; background-color: #060e20;")
         self._video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._video_label, stretch=1)
 
@@ -253,7 +276,6 @@ class EnrollView(QWidget):
 
         return card
 
-    # ── Thẻ Form (Form Card) ─────────────────────────────────────────────────
     def _build_form_card(self) -> QFrame:
         card = QFrame()
         card.setStyleSheet("""
@@ -271,12 +293,10 @@ class EnrollView(QWidget):
         title.setStyleSheet("color: #4cd7f6; font-size: 12px; font-weight: 700; letter-spacing: 1px; border: none;")
         layout.addWidget(title)
 
-        # Form Fields
         self._emp_code_input = self._create_input_group("Mã Nhân Viên *", "VD: NV001", layout)
         self._name_input     = self._create_input_group("Họ và Tên *", "VD: Nguyễn Văn A", layout)
         self._dept_input     = self._create_input_group("Phòng Ban", "VD: Kỹ thuật", layout)
 
-        # Progress bar Area
         prog_layout = QVBoxLayout()
         prog_layout.setSpacing(8)
         
@@ -308,7 +328,6 @@ class EnrollView(QWidget):
         prog_layout.addWidget(self._progress)
         layout.addLayout(prog_layout)
 
-        # Status Hint
         self._status_label = QLabel("Vui lòng điền thông tin và nhấn 'Bắt đầu lấy mẫu'.")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #94a3b8; font-size: 13px; min-height: 40px; border: none;")
@@ -316,7 +335,6 @@ class EnrollView(QWidget):
 
         layout.addStretch()
 
-        # Action Buttons
         btn_layout = QVBoxLayout()
         btn_layout.setSpacing(12)
 
@@ -327,31 +345,19 @@ class EnrollView(QWidget):
         self._style_primary_btn(self._btn_collect)
         btn_layout.addWidget(self._btn_collect)
 
-        row_btn = QHBoxLayout()
-        row_btn.setSpacing(12)
-
-        self._btn_cancel = QPushButton("✕  Hủy")
-        self._btn_cancel.setFixedHeight(40)
-        self._btn_cancel.setCursor(Qt.PointingHandCursor)
-        self._btn_cancel.setEnabled(False)
-        self._btn_cancel.clicked.connect(self._on_cancel)
-        self._style_danger_btn(self._btn_cancel)
-        row_btn.addWidget(self._btn_cancel)
-
+        # Đã loại bỏ hoàn toàn nút Hủy. Chỉ giữ lại nút Làm lại.
         self._btn_reset = QPushButton("↺  Làm lại")
         self._btn_reset.setFixedHeight(40)
         self._btn_reset.setCursor(Qt.PointingHandCursor)
         self._btn_reset.setEnabled(False)
         self._btn_reset.clicked.connect(self._reset_form)
         self._style_secondary_btn(self._btn_reset)
-        row_btn.addWidget(self._btn_reset)
+        btn_layout.addWidget(self._btn_reset)
 
-        btn_layout.addLayout(row_btn)
         layout.addLayout(btn_layout)
 
         return card
 
-    # ── Helpers Giao diện ────────────────────────────────────────────────────
     def _create_input_group(self, label_text: str, placeholder: str, parent_layout: QVBoxLayout) -> QLineEdit:
         group = QVBoxLayout()
         group.setSpacing(6)
@@ -410,25 +416,8 @@ class EnrollView(QWidget):
             QPushButton:disabled { background-color: transparent; border: 1px solid #334155; color: #475569; }
         """)
 
-    def _style_danger_btn(self, btn: QPushButton) -> None:
-        btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #f87171;
-                border: 1px solid #f87171;
-                border-radius: 8px;
-                font-size: 13px;
-                font-weight: 700;
-            }
-            QPushButton:hover { background-color: #f87171; color: #0b1326; }
-            QPushButton:pressed { background-color: #dc2626; color: #0b1326; }
-            QPushButton:disabled { background-color: transparent; border: 1px solid #334155; color: #475569; }
-        """)
-
-    # ── Slots & Logic điều khiển ─────────────────────────────────────────────
     @Slot()
     def _on_start_collect(self) -> None:
-        # Validate form
         emp_code = self._emp_code_input.text().strip().upper()
         name     = self._name_input.text().strip()
 
@@ -441,52 +430,33 @@ class EnrollView(QWidget):
             self._name_input.setFocus()
             return
 
-        # Khởi động camera nếu chưa
         if not self._camera_started:
             if not self._camera.start():
                 QMessageBox.critical(self, "Lỗi", "Không thể mở camera!")
                 return
             self._camera_started = True
 
-        # Reset mẫu
         self._face_samples.clear()
         self._progress.setValue(0)
 
-        # Khởi động collector thread
         self._collector = _SampleCollector(self._camera, parent=self)
         self._collector.preview_ready.connect(self._on_preview)
         self._collector.sample_captured.connect(self._on_sample_captured)
         self._collector.finished.connect(self._on_collect_finished)
         self._collector.start()
 
-        # Cập nhật UI
         self._btn_collect.setEnabled(False)
-        self._btn_cancel.setEnabled(True)
         self._btn_reset.setEnabled(False)
         self._emp_code_input.setEnabled(False)
         self._name_input.setEnabled(False)
         self._dept_input.setEnabled(False)
         self._set_status("📸 Đang thu thập mẫu sinh trắc học — vui lòng nhìn thẳng...", "#4cd7f6")
 
-    @Slot()
-    def _on_cancel(self) -> None:
-        if self._collector and self._collector.isRunning():
-            self._collector.stop()
-        self._restore_controls()
-        self._set_status("Đã hủy thu thập mẫu sinh trắc học.", "#fbbf24")
-
     @Slot(np.ndarray)
     def _on_preview(self, frame_bgr: np.ndarray) -> None:
-        """Hiển thị frame lên QLabel/VideoFrame."""
-        h, w, ch = frame_bgr.shape
-        rgb   = frame_bgr[:, :, ::-1].copy()
-        q_img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
-        pix   = QPixmap.fromImage(q_img).scaled(
-            self._video_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        self._video_label.setPixmap(pix)
+        # Tối ưu resize ảnh: Sử dụng hàm update_frame của VideoFrame (chứa cv2.resize siêu tốc)
+        if hasattr(self._video_label, 'update_frame'):
+            self._video_label.update_frame(frame_bgr)
 
     @Slot(np.ndarray, int)
     def _on_sample_captured(self, face_crop: np.ndarray, count: int) -> None:
@@ -500,12 +470,15 @@ class EnrollView(QWidget):
     @Slot(bool, str)
     def _on_collect_finished(self, success: bool, msg: str) -> None:
         self._restore_controls()
+        
+        # [FIX]: Tự động ngắt camera ngay khi đủ mẫu để không chạy ngầm
+        self._camera.stop()
+        self._camera_started = False
 
         if not success:
             self._set_status(f"ℹ {msg}", "#94a3b8")
             return
 
-        # Đủ mẫu → tự động enroll
         self._set_status("💾 Đang mã hóa và lưu vector vào Database...", "#4cd7f6")
         self._do_enroll()
 
@@ -542,10 +515,8 @@ class EnrollView(QWidget):
             QMessageBox.warning(self, "Đăng ký thất bại", result.message)
             self._btn_reset.setEnabled(True)
 
-    # ── Helpers Reset/Close ──────────────────────────────────────────────────
     def _restore_controls(self) -> None:
         self._btn_collect.setEnabled(True)
-        self._btn_cancel.setEnabled(False)
         self._emp_code_input.setEnabled(True)
         self._name_input.setEnabled(True)
         self._dept_input.setEnabled(True)
@@ -553,7 +524,10 @@ class EnrollView(QWidget):
     def _reset_form(self) -> None:
         if self._collector and self._collector.isRunning():
             self._collector.stop()
+        
+        # [FIX]: Trả cờ về False dứt điểm để sửa lỗi liệt nút "Bắt đầu lấy mẫu"
         self._camera.stop()
+        self._camera_started = False
         
         if hasattr(self, '_video_label') and hasattr(self._video_label, 'clear_frame'):
             self._video_label.clear_frame() 
@@ -568,6 +542,14 @@ class EnrollView(QWidget):
         self._btn_reset.setEnabled(False)
         self._emp_code_input.setFocus()
 
+    @Slot()
+    def _on_cancel(self) -> None:
+        """
+        Hàm giao tiếp để MainWindow gọi tới khi chuyển tab hoặc tắt hệ thống.
+        Gọi _reset_form để đảm bảo camera được tắt và dọn dẹp sạch sẽ.
+        """
+        self._reset_form()
+
     def _set_status(self, text: str, color: str = "#94a3b8") -> None:
         self._status_label.setText(text)
         self._status_label.setStyleSheet(
@@ -575,7 +557,13 @@ class EnrollView(QWidget):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._collector and self._collector.isRunning():
-            self._collector.stop()
-        self._camera.stop()
+        # [FIX]: Dọn dẹp an toàn khi tắt ứng dụng hoặc chuyển trang, không gọi _on_cancel sai lầm.
+        try:
+            if self._collector and self._collector.isRunning():
+                self._collector.stop()
+            self._camera.stop()
+            self._camera_started = False
+        except Exception as e:
+            logger.warning(f"Lỗi khi dọn dẹp EnrollView: {e}")
+            
         super().closeEvent(event)

@@ -156,42 +156,53 @@ class DatabaseManager:
         confidence_score: float = 0.0,
         is_spoofed: bool = False,
     ) -> tuple[bool, str]:
-        """
-        Ghi nhận chấm công với kiểm tra cooldown.
-
-        Returns:
-            (True, "OK")          — ghi thành công
-            (False, lý do)        — bị chặn (cooldown | trùng session | spoofed)
-        """
+        """Ghi nhận chấm công với kiểm tra cooldown an toàn cho SQLite."""
         if is_spoofed:
             return False, "Phát hiện giả mạo khuôn mặt."
 
         now = datetime.now()
 
         with self._get_session() as s:
-            # Kiểm tra đã chấm công trong session này chưa (UniqueConstraint backup)
-            existing = s.scalar(
+            # 1. Lấy bản ghi điểm danh GẦN NHẤT của nhân viên này
+            last_att = (
+                s.query(Attendance)
+                .filter(Attendance.emp_id == emp_id)
+                .order_by(Attendance.timestamp.desc())
+                .first()
+            )
+            
+            # 2. Xử lý logic Cooldown trực tiếp bằng Python (An toàn tuyệt đối cho SQLite)
+            if last_att:
+                last_time = last_att.timestamp
+                # Parse string sang datetime nếu SQLite lưu dạng string
+                if isinstance(last_time, str):
+                    try:
+                        last_time = datetime.strptime(last_time.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        last_time = now
+                
+                elapsed = (now - last_time).total_seconds()
+                if elapsed < ATTENDANCE_COOLDOWN_SECONDS:
+                    remaining = int(ATTENDANCE_COOLDOWN_SECONDS - elapsed)
+                    hours = remaining // 3600
+                    minutes = (remaining % 3600) // 60
+                    return False, f"Điểm danh quá gần nhau. Cooldown còn {hours}h{minutes}p."
+
+            # 3. Kiểm tra xem đã điểm danh trong ca này chưa (Chống trùng ca)
+            existing_in_session = s.scalar(
                 select(Attendance).where(
                     Attendance.emp_id == emp_id,
                     Attendance.session_id == session_id,
                 )
             )
-            if existing:
-                return False, f"Đã chấm công lúc {existing.timestamp.strftime('%H:%M:%S')}."
+            if existing_in_session:
+                # Xử lý format timestamp an toàn để in ra log
+                ts = existing_in_session.timestamp
+                if isinstance(ts, str):
+                    ts = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                return False, f"Đã điểm danh trong ca này lúc {ts.strftime('%H:%M:%S')}."
 
-            # Cooldown: kiểm tra toàn bộ session, tránh nhận diện lặp nhanh
-            cooldown_cutoff = now - timedelta(seconds=ATTENDANCE_COOLDOWN_SECONDS)
-            recent = s.scalar(
-                select(Attendance).where(
-                    Attendance.emp_id == emp_id,
-                    Attendance.timestamp >= cooldown_cutoff,
-                )
-            )
-            if recent:
-                elapsed = (now - recent.timestamp).seconds
-                remaining = ATTENDANCE_COOLDOWN_SECONDS - elapsed
-                return False, f"Cooldown còn {remaining}s."
-
+            # 4. Ghi nhận lượt điểm danh mới
             record = Attendance(
                 emp_id=emp_id,
                 session_id=session_id,
@@ -201,7 +212,7 @@ class DatabaseManager:
             )
             s.add(record)
             s.commit()
-            return True, "OK"
+            return True, "Ghi nhận thành công."
 
     def get_attendance_by_session(self, session_id: int) -> list[Attendance]:
         with self._get_session() as s:

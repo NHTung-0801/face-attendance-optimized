@@ -87,7 +87,12 @@ face-attendance-optimized/
 
 
 ## 🚀 Hướng Dẫn Cài Đặt
-1. Khởi tạo môi trường
+### 1. Yêu Cầu Hệ Thống
+- Python 3.10 trở lên.
+
+- Webcam (Tích hợp hoặc cắm ngoài).
+
+### 2. Khởi tạo môi trường
 Khuyến nghị sử dụng môi trường ảo (Virtual Environment) để tránh xung đột thư viện.
 
 ```bash
@@ -98,21 +103,52 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-2. Cài đặt các thư viện cần thiết
+### 3. Cài đặt các thư viện cần thiết
 
 ```bash
 pip install -r requirements.txt
 ```
 (Lưu ý: Nếu sử dụng InsightFace trên Windows, bạn có thể cần cài đặt gói .whl tương ứng với phiên bản Python của mình).
 
-3. Cấu hình Dữ liệu và Mô hình
+### 4. Cấu hình Dữ liệu và Mô hình
 - Đảm bảo bạn đã đưa file mô hình YOLO (best.onnx) và các model của InsightFace vào thư mục data/models/.
 ```bash
 pip install insightface-0.7.3-cp310-cp310-win_amd64.whl
 ```
 - Hệ thống sẽ tự động khởi tạo file CSDL và FAISS index trong lần chạy đầu tiên.
 
-4. Khởi chạy Ứng dụng
+
+### 5. Thu thập dữ liệu huấn luyện (Data Collection)
+- Chạy lệnh sau trong Terminal:
+```bash
+python tools/data_collection.py
+```
+- Camera sẽ bật lên. Hãy làm theo hướng dẫn:
+    - Nhìn thẳng vào camera, đảm bảo khung viền xanh lá (Face Locked) xuất hiện trên mặt bạn.
+
+    - Thu thập mặt thật (Real): Bấm phím r nhiều lần ở nhiều góc độ khác nhau (cười, nghiêm túc, nghiêng đầu nhẹ...).
+
+    - Thu thập mặt giả (Fake): Lấy điện thoại mở một bức ảnh khuôn mặt của bạn (hoặc ai đó) rồi giơ lên trước webcam sao cho nó bắt được khung viền xanh lá. Sau đó bấm phím f nhiều lần để chụp lại.
+
+    - Số lượng: Để mô hình thông minh, bạn nên cố gắng bấm chụp khoảng 50 - 100 tấm Real và 50 - 100 tấm Fake.
+
+- Bấm phím q để thoát camera sau khi thu thập đủ.
+
+### 6. Huấn luyện và Đóng gói Mô hình AI (Train & Export)
+- Bắt đầu huấn luyện: Chạy lệnh sau:
+```bash
+python tools/train_yolo.py
+```
+Tool này sẽ tự động tải mô hình YOLOv8n về, chia dữ liệu bạn vừa chụp và bắt đầu huấn luyện. Quá trình này có thể mất từ vài phút đến hơn mười phút tùy vào cấu hình máy (hiện tại trong file bạn set 50 epochs).
+
+- Đóng gói ra file .onnx: Sau khi terminal báo Train xong, bạn chạy tiếp lệnh này để xuất file chạy nhẹ cho phần mềm:
+```bash
+python tools/export_onnx.py
+```
+Hệ thống sẽ chuyển đổi file và tự động lưu best.onnx vào đúng thư mục data/models/ cho phần mềm chính sử dụng.
+
+
+### 7. Khởi chạy Ứng dụng
 ```bash
 python main.py
 ```

@@ -101,14 +101,23 @@ class AIWorker(QThread):
                     cached_recog_results,
                 )
 
-                # ── Resize cho display ────────────────────────────────────
-                display = cv2.resize(
-                    annotated, (DISPLAY_WIDTH, DISPLAY_HEIGHT),
-                    interpolation=cv2.INTER_LINEAR,
-                )
+                # --- TỐI ƯU HIỆU NĂNG: Xử lý Letterbox ngầm ở Background Thread ---
+                h, w = annotated.shape[:2]
+                scale = min(DISPLAY_WIDTH / w, DISPLAY_HEIGHT / h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                
+                resized = cv2.resize(annotated, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                canvas = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
+                pad_x = (DISPLAY_WIDTH - new_w) // 2
+                pad_y = (DISPLAY_HEIGHT - new_h) // 2
+                canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
+                
+                # Đổi màu sang RGB ngay ở luồng ngầm
+                rgb_frame = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
 
-                # ── Emit ──────────────────────────────────────────────────
-                self.frame_ready.emit(display)
+                # ── Emit ảnh đã xử lý xong ────────────────────────────────
+                self.frame_ready.emit(rgb_frame)
+
 
                 if run_recog or run_spoof:
                     ai_results = _merge_results(

@@ -32,7 +32,7 @@ from src.utils.config import (
 @dataclass
 class RecognizeResult:
     emp_code:   str
-    similarity: float                           # 0.0 – 1.0 (cosine IP sau normalize)
+    similarity: float                           # Độ giống nhau (Cosine Similarity)
     bbox:       Optional[tuple[int, int, int, int]]  # (x1, y1, x2, y2)
 
 
@@ -202,13 +202,6 @@ class FaceRecognizer:
         """
         Thêm một hoặc nhiều embedding của cùng một nhân viên vào FAISS.
         Tự động save index sau khi thêm.
-
-        Args:
-            emp_code:   Mã nhân viên (khớp với Employee.emp_code trong DB).
-            embeddings: Danh sách vector 512-dim đã normalize.
-
-        Returns:
-            True nếu thành công.
         """
         if not embeddings:
             return False
@@ -228,9 +221,6 @@ class FaceRecognizer:
         """
         Xóa toàn bộ embedding của nhân viên và rebuild index.
         IndexFlatIP không hỗ trợ xóa trực tiếp → phải rebuild.
-
-        Returns:
-            True nếu tìm thấy và xóa thành công.
         """
         with self._index_lock:
             # Tìm tất cả row_id thuộc emp_code
@@ -266,15 +256,7 @@ class FaceRecognizer:
         self, query_embedding: np.ndarray, top_k: int = 1
     ) -> list[tuple[str, float]]:
         """
-        Tìm kiếm trong FAISS.
-
-        Args:
-            query_embedding: vector 512-dim đã L2-normalize.
-            top_k:           số kết quả trả về.
-
-        Returns:
-            list[(emp_code, similarity)] sắp xếp theo similarity giảm dần.
-            Chỉ trả về kết quả vượt ngưỡng FACE_RECOGNITION_THRESHOLD.
+        Tìm kiếm trong FAISS sử dụng Cosine Similarity nguyên bản.
         """
         with self._index_lock:
             if self._index.ntotal == 0:
@@ -288,11 +270,14 @@ class FaceRecognizer:
         for sim, idx in zip(similarities[0], indices[0]):
             if idx < 0:
                 continue
-            # IndexFlatIP với vector unit-norm → sim ∈ [-1, 1] (cosine)
-            # Chuyển về [0, 1] để dễ đọc: score = (sim + 1) / 2
-            score = float((sim + 1.0) / 2.0)
+            
+            # [FIX LỚP 1] Lấy nguyên bản Cosine Similarity (không chia 2)
+            score = float(sim)
+            
+            # Lọc sơ bộ những kết quả quá tệ
             if score < FACE_RECOGNITION_THRESHOLD:
                 continue
+                
             emp_code = self._meta.get(int(idx), "UNKNOWN")
             results.append((emp_code, score))
 
@@ -303,6 +288,7 @@ class FaceRecognizer:
     ) -> list[RecognizeResult]:
         """
         Pipeline đầy đủ: detect khuôn mặt trong frame → trích embedding → nhận diện.
+        Đã bổ sung chốt chặn FACE_RECOGNITION_THRESHOLD để chống nhận diện nhầm (Bảo mật kép).
         """
         detections = self.get_embeddings_from_frame(frame_bgr)
         output: list[RecognizeResult] = []
@@ -311,7 +297,7 @@ class FaceRecognizer:
             matches = self.identify_face(emb, top_k=top_k)
             
             if not matches:
-                # Nếu không tìm thấy ai khớp, gán nhãn UNKNOWN thay vì bỏ qua
+                # Không tìm thấy ai trong DB (hoặc đã bị lọc ở bước trước)
                 output.append(
                     RecognizeResult(
                         emp_code="UNKNOWN",
@@ -321,15 +307,27 @@ class FaceRecognizer:
                 )
                 continue
             
-            # Nếu tìm thấy, lấy kết quả tốt nhất
+            # FAISS trả về kết quả giống nhất (đứng đầu danh sách)
             emp_code, similarity = matches[0]
-            output.append(
-                RecognizeResult(
-                    emp_code=emp_code,
-                    similarity=similarity,
-                    bbox=bbox,
+            
+            # 🔒 CHỐT CHẶN (Bảo mật lớp 2): Chỉ công nhận nếu độ tin cậy vượt ngưỡng an toàn
+            if similarity >= FACE_RECOGNITION_THRESHOLD:
+                output.append(
+                    RecognizeResult(
+                        emp_code=emp_code,
+                        similarity=similarity,
+                        bbox=bbox,
+                    )
                 )
-            )
+            else:
+                # Đánh rớt kết quả vì độ tin cậy quá thấp (coi là người lạ)
+                output.append(
+                    RecognizeResult(
+                        emp_code="UNKNOWN",
+                        similarity=similarity,
+                        bbox=bbox,
+                    )
+                )
 
         return output
 

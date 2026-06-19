@@ -1,6 +1,7 @@
 """
 src/gui/components/video_frame.py
 Component hiển thị luồng Camera tái sử dụng.
+Đã tối ưu hiệu năng bằng cv2.resize và áp dụng thuật toán Letterbox chống méo ảnh.
 """
 from __future__ import annotations
 
@@ -19,42 +20,23 @@ class VideoFrame(QLabel):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         
-        # SỬ DỤNG PROPERTY THAY VÌ STYLESHEET HARDCODE
-        # Đảm bảo bạn có CSS `.video-frame { background-color: #000; border-radius: 8px; }` trong dark.qss
         self.setProperty("class", "video-frame")
-        
         self.setMinimumSize(640, 480)
         self.setText("🎥 Đang chờ tín hiệu Camera...")
 
     @Slot(np.ndarray)
-    def update_frame(self, frame_bgr: np.ndarray) -> None:
-        """Nhận np.ndarray (BGR) từ luồng Worker, chuyển đổi và tự động co giãn giữ tỉ lệ."""
-        if frame_bgr is None or frame_bgr.size == 0:
+    def update_frame(self, frame_rgb: np.ndarray) -> None:
+        if frame_rgb is None or frame_rgb.size == 0:
             return
 
         try:
-            # 1. Chuyển đổi màu từ BGR (OpenCV) sang RGB (PySide6)
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h, w, ch = frame_rgb.shape
             bytes_per_line = ch * w
-
-            # 2. Tạo QImage
             image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            self.setPixmap(QPixmap.fromImage(image))
+        except Exception as exc:
+            logger.exception("Lỗi render khung hình camera")
 
-            # 3. Tạo QPixmap và scale
-            pixmap = QPixmap.fromImage(image)
-            scaled_pixmap = pixmap.scaled(
-                self.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-            self.setPixmap(scaled_pixmap)
-            
-        except Exception as e:
-            logger.error(f"VideoFrame: Lỗi khi convert frame hiển thị - {e}")
-
-    @Slot()
     def clear_frame(self) -> None:
-        """Xóa khung hình hiện tại và đưa về trạng thái chờ."""
-        self.clear()
+        self.setPixmap(QPixmap())
         self.setText("🎥 Đang chờ tín hiệu Camera...")
